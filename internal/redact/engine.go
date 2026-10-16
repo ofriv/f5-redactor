@@ -1,0 +1,49 @@
+package redact
+
+import "f5-redactor/internal/config"
+
+// Engine applies a validated rule set. It holds no mutable state, so one
+// Engine can be shared by many goroutines.
+type Engine struct {
+	keyRules   []config.KeyRule
+	valueRules []config.ValueRule
+	actions    Actions
+}
+
+// New builds an Engine from a validated config.
+func New(cfg *config.Config) *Engine {
+	return &Engine{
+		keyRules:   cfg.KeyRules,
+		valueRules: cfg.ValueRules,
+		actions:    NewActions(cfg.Settings),
+	}
+}
+
+// Counts records how many redactions each rule made, keyed by rule name.
+// A nil Counts is allowed and records nothing.
+type Counts map[string]int
+
+func (c Counts) add(rule string) {
+	if c != nil {
+		c[rule]++
+	}
+}
+
+// validators maps a validator name from rules.yaml to its check.
+var validators = map[string]func(string) bool{
+	config.ValidatorLuhn: Luhn,
+}
+
+// validate runs the named validator on a match. An unknown validator cannot
+// get past config validation; if one ever did, the match is kept (fail
+// closed: redact rather than leak).
+func validate(name, match string) bool {
+	if name == "" {
+		return true
+	}
+	check, ok := validators[name]
+	if !ok {
+		return true
+	}
+	return check(match)
+}
