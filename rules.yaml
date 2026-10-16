@@ -9,12 +9,15 @@ settings:
 # key_rules match on the NAME of a JSON key or HTTP header.
 #   scope: headers | body | any
 #   match: either { exact: [names...] } or { regex: "..." }
+#   preserve_scheme (optional): keep a leading auth scheme such as "Bearer"
+#     and redact only the credential after it.
 key_rules:
   - name: auth-headers
     scope: headers
     match:
       exact: [Authorization, Proxy-Authorization, X-Auth-Token, Cookie, Set-Cookie]
     action: mask
+    preserve_scheme: true
 
   - name: api-key-names
     scope: any

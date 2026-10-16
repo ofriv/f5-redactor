@@ -69,6 +69,12 @@ type KeyRule struct {
 	Scope  Scope
 	Action Action
 
+	// PreserveScheme keeps a leading HTTP auth scheme and redacts only the
+	// credential after it: "Bearer eyJ..." becomes "Bearer ****". The scheme
+	// is useful for threat detection (Basic auth on an API is a signal) and
+	// is not secret. This is an extension of the provided config format.
+	PreserveScheme bool
+
 	// Exactly one of exact / re is set.
 	exact map[string]struct{} // lower-cased names, matched case-insensitively
 	re    *regexp.Regexp
@@ -166,7 +172,8 @@ type rawKeyRule struct {
 		Exact []string `yaml:"exact"`
 		Regex string   `yaml:"regex"`
 	} `yaml:"match"`
-	Action string `yaml:"action"`
+	Action         string `yaml:"action"`
+	PreserveScheme bool   `yaml:"preserve_scheme"`
 }
 
 type rawValueRule struct {
@@ -216,7 +223,7 @@ func (raw *rawConfig) validate() (*Config, error) {
 	for i, r := range raw.KeyRules {
 		checkName("key_rules", i, r.Name)
 		label := fmt.Sprintf("key_rules[%d] %q", i, r.Name)
-		rule := KeyRule{Name: r.Name, Scope: Scope(r.Scope), Action: Action(r.Action)}
+		rule := KeyRule{Name: r.Name, Scope: Scope(r.Scope), Action: Action(r.Action), PreserveScheme: r.PreserveScheme}
 
 		switch rule.Scope {
 		case ScopeHeaders, ScopeBody, ScopeAny:
@@ -225,6 +232,9 @@ func (raw *rawConfig) validate() (*Config, error) {
 		}
 		if !validAction(rule.Action) {
 			fail("%s: invalid action %q (want mask, partial, hash or remove)", label, r.Action)
+		}
+		if rule.PreserveScheme && rule.Action == ActionRemove {
+			fail("%s: preserve_scheme has no effect with action remove", label)
 		}
 
 		hasExact, hasRegex := len(r.Match.Exact) > 0, r.Match.Regex != ""

@@ -37,6 +37,9 @@ func TestLoadShippedRules(t *testing.T) {
 		if r.Name != w.name || r.Scope != w.scope || r.Action != w.action {
 			t.Errorf("key_rules[%d] = {%s %s %s}, want {%s %s %s}", i, r.Name, r.Scope, r.Action, w.name, w.scope, w.action)
 		}
+		if wantScheme := r.Name == "auth-headers"; r.PreserveScheme != wantScheme {
+			t.Errorf("key_rules[%d] %s: PreserveScheme = %v, want %v", i, r.Name, r.PreserveScheme, wantScheme)
+		}
 	}
 
 	wantValue := []struct {
@@ -166,6 +169,11 @@ version: 1
 key_rules:
   - { name: a, scope: body, match: { exact: [x, ""] }, action: mask }
 `, "empty name"},
+		{"preserve_scheme with remove", `
+version: 1
+key_rules:
+  - { name: a, scope: headers, match: { exact: [Authorization] }, action: remove, preserve_scheme: true }
+`, "preserve_scheme has no effect"},
 		{"broken key regex", `
 version: 1
 key_rules:
