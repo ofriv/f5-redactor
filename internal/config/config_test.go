@@ -57,6 +57,7 @@ func TestLoadShippedRules(t *testing.T) {
 		{"api-key-prefix", "", ActionMask},
 		{"url-credentials", "", ActionMask},
 		{"pem-private-key", "", ActionMask},
+		{"bearer-token", "", ActionMask},
 		{"http-header-dump", "", ActionMask},
 		{"secret-assignment", "", ActionMask},
 		{"json-secret", "", ActionMask},

@@ -33,6 +33,15 @@ func TestKnownSecretFormats(t *testing.T) {
 		{"bearer_token in text", "bearer_token=abc", "bearer_token=****"},
 		{"escaped json text", `{\"password\":\"hunter2\"}`, `{\"password\":\"****\"}`},
 		{"international email", "mail user@exämple.com", "mail " + Hash("user@exämple.com")},
+		{"bearer token in text", "forwarded Bearer opaque-token-123 to upstream", "forwarded Bearer **** to upstream"},
+		{"the word bearer in prose", "the bearer of bad news", "the bearer of bad news"},
+		{"openai key", "key sk-proj-abcdefghijklmnopqrstuvwxyz012345", "key ****"},
+		{"anthropic key", "sk-ant-api03-abcdefghijklmnopqrstuvwxyz", "****"},
+		{"stripe webhook secret", "whsec_abcdefghijklmnopqrstuvwxyz", "****"},
+		{"pgp private key", "-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQOY\n-----END PGP PRIVATE KEY BLOCK-----", "****"},
+		{"truncated pem key", "x -----BEGIN PRIVATE KEY-----\nMIIE cut off", "x ****"},
+		{"password as a number in json text", `{"user":"u","pin_password":12345`, `{"user":"u","pin_password":****`},
+		{"headers written as json text", `{\"X-Authorization\":\"Bearer opaque123\"}`, `{\"X-Authorization\":\"****\"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -49,8 +58,8 @@ func TestKnownSecretFormats(t *testing.T) {
 
 func TestKeyNamesWithSpacesAndNewHeaders(t *testing.T) {
 	e := shippedEngine(t)
-	in := `{"body":{"password ":"a"," token":"b"},"headers":{"X-Goog-Api-Key":"c","X-Pwd":"d","X-Api-Key":"k"}}`
-	want := `{"body":{"password ":"****"," token":"****"},"headers":{"X-Goog-Api-Key":"****","X-Pwd":"****","X-Api-Key":"` + Hash("k") + `"}}`
+	in := `{"body":{"password ":"a"," token":"b"},"headers":{"X-Goog-Api-Key":"c","X-Pwd":"d","X-Api-Key":"k","X-Authorization":"e","X-Cookie":"f","X-CSRF":"g"}}`
+	want := `{"body":{"password ":"****"," token":"****"},"headers":{"X-Goog-Api-Key":"****","X-Pwd":"****","X-Api-Key":"` + Hash("k") + `","X-Authorization":"****","X-Cookie":"****","X-CSRF":"****"}}`
 	if got, _ := redactLine(t, e, in); got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}

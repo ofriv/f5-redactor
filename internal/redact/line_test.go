@@ -30,12 +30,13 @@ func TestRedactLine(t *testing.T) {
 		counts Counts
 	}{
 		{
-			// A body field named Authorization is not a header; a header
-			// named password is caught by the header rule credential-headers.
-			name:   "header rules apply to headers only",
+			// In headers the header rules apply (auth-headers keeps the
+			// scheme); in the body the body rule secret-fields applies, which
+			// also knows authorization (whole value masked).
+			name:   "header rules in headers, body rules in the body",
 			in:     `{"headers":{"Authorization":"Bearer abc","X-Api-Key":"k","Content-Type":"application/json","password":"p"},"body":{"password":"p","Authorization":"x"}}`,
-			want:   `{"headers":{"Authorization":"Bearer ****","X-Api-Key":"` + h("k") + `","Content-Type":"application/json","password":"****"},"body":{"password":"****","Authorization":"x"}}`,
-			counts: Counts{"auth-headers": 1, "api-key-names": 1, "credential-headers": 1, "secret-fields": 1},
+			want:   `{"headers":{"Authorization":"Bearer ****","X-Api-Key":"` + h("k") + `","Content-Type":"application/json","password":"****"},"body":{"password":"****","Authorization":"****"}}`,
+			counts: Counts{"auth-headers": 1, "api-key-names": 1, "credential-headers": 1, "secret-fields": 2},
 		},
 		{
 			name:   "header names in any case (lines 2 and 14)",
@@ -160,11 +161,12 @@ func TestRedactLine(t *testing.T) {
 			counts: Counts{"secret-fields": 1},
 		},
 		{
-			// Header rules stay with headers: a JSON field called Cookie is
-			// not an HTTP header.
+			// Header rules stay with headers: credential-headers would mask
+			// a header named X-Session-Count, but a JSON field of that name
+			// gets only the body rules, which leave it.
 			name:   "header rules do not apply to top-level fields",
-			in:     `{"Cookie":"plain value"}`,
-			want:   `{"Cookie":"plain value"}`,
+			in:     `{"X-Session-Count":"3"}`,
+			want:   `{"X-Session-Count":"3"}`,
 			counts: Counts{},
 		},
 		{

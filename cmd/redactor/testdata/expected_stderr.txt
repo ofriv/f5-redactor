@@ -18,6 +18,7 @@ redactions by rule:
   api-key-prefix         2
   url-credentials        0
   pem-private-key        0
+  bearer-token           0
   http-header-dump       0
   secret-assignment      1
   json-secret            0

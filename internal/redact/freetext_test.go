@@ -21,7 +21,10 @@ func TestSecretAssignmentInText(t *testing.T) {
 		// JSON syntax in text is the json-secret rule's job.
 		{`json "password":"x" in text`, `json "password":"****" in text`},
 		{"password_hint=first pet", "password_hint=first pet"},
-		{"mypassword=x", "mypassword=x"},
+		// A name that ends with a secret word is a secret name.
+		{"mypassword=x", "mypassword=****"},
+		{"debug db_password=Hunter2 AWS_SECRET_ACCESS_KEY=abcd1234", "debug db_password=**** AWS_SECRET_ACCESS_KEY=****"},
+		{"password_hint=first", "password_hint=first"},
 		{"no secret here", "no secret here"},
 	}
 	for _, tt := range tests {

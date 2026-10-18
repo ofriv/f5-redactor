@@ -86,6 +86,10 @@ var secretNames = []string{
 	"access-token", "refresh_token", "refreshToken", "id_token", "idToken",
 	"auth_token", "authToken", "session_token", "sessionToken", "bearer_token", "bearerToken",
 	"api_key", "apiKey", "ApiKey", "api-key", "x-api-key", "X-API-KEY",
+	// Names with a prefix, found by the independent reviews.
+	"newPassword", "currentPassword", "db_password", "user_password", "secret_key",
+	"secretAccessKey", "AWS_SECRET_ACCESS_KEY", "sessionId", "session_id", "apiToken",
+	"api_token", "csrf_token", "webhook_secret", "credentials", "authorization", "cookie", "auth",
 }
 
 // namedSecrets: a secret that only its field name identifies.

@@ -21,8 +21,20 @@ func TestSecretFieldSpellings(t *testing.T) {
 			t.Errorf("%s: got %s", key, got)
 		}
 	}
-	// Look-alikes stay (input line 48 and similar).
-	for _, key := range []string{"password_hint", "passwordless", "tokenizer", "secret_santa", "token_type", "tokens_used", "session_count"} {
+	// Names that end with a secret word, found by the independent reviews.
+	for _, key := range []string{
+		"newPassword", "current_password", "db_password", "secretAccessKey", "AWS_SECRET_ACCESS_KEY",
+		"sessionId", "api_token", "csrf_token", "webhook_secret", "credentials", "authorization", "Cookie",
+	} {
+		in := `{"body":{"` + key + `":"s3cr3t-value"}}`
+		want := `{"body":{"` + key + `":"****"}}`
+		if got, _ := redactLine(t, e, in); got != want {
+			t.Errorf("%s: got %s", key, got)
+		}
+	}
+	// Look-alikes stay (input line 48 and similar): they do not END with a
+	// secret word.
+	for _, key := range []string{"password_hint", "passwordless", "tokenizer", "secret_santa", "token_type", "tokens_used", "session_count", "password_changed_at", "max_tokens", "author"} {
 		in := `{"body":{"` + key + `":"v"}}`
 		if got, _ := redactLine(t, e, in); got != in {
 			t.Errorf("%s should not be redacted: %s", key, got)
