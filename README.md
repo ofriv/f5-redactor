@@ -49,7 +49,7 @@ curl --data-binary @input.ndjson localhost:8080/redact
 |---|---|
 | `POST /redact` | NDJSON in, redacted NDJSON out, streamed. The per-request summary comes as the `X-Redactor-Summary` trailer and in the server log. Works with `Expect: 100-continue`, which curl sends for bodies over 1 MiB. |
 | `GET /healthz` | liveness: `200` while the process answers |
-| `GET /readyz` | readiness: `200` with rules loaded, `503` once shutdown has started |
+| `GET /readyz` | readiness: `200` while serving, `503` once shutdown has started (the server only starts after the rules loaded) |
 
 The server is built from rules that already loaded. If `rules.yaml` is
 missing or invalid the process exits (code 2) before it listens, so traffic
@@ -416,6 +416,11 @@ independent AI reviews of the finished repo, each given only the brief and
 the code, found more: a `curl` upload over 1 MiB (`Expect: 100-continue`)
 lost its body, a line of many tiny values used far more memory than its
 size, a card written right after a hash was skipped, and more name
-spellings. Commits are small and each builds and passes its tests; fixes to
-my own earlier commits are separate commits, so the history shows what each
-review found.
+spellings. A second round found that a password next to a host was hashed
+by the email rule instead of masked, that plural names (`passwords`) and
+HAR-style header lists leaked, and that the pod's memory sizing was based
+on the wrong worst case; it also led to the worker pool. Commits are small
+and each builds and passes its tests; fixes to my own earlier commits are
+separate commits, so the history shows what each review found. The first
+round's eight fixes were committed together after I approved them as a
+set, so they share a timestamp.
