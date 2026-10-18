@@ -43,8 +43,8 @@ func sampleInput(tb testing.TB) []byte {
 }
 
 // The input is streamed: memory stays flat however large the input is. This
-// pushes 256 MiB through Process and checks that the heap never grows past
-// a small bound. The bound is far below the input size, so a version that
+// pushes 64 MiB through Process and checks that the heap never grows past
+// a small bound. The bound is half the input size, so a version that
 // buffered the input would fail.
 func TestMemoryStaysFlat(t *testing.T) {
 	if testing.Short() {

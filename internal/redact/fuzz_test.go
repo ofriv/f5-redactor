@@ -2,6 +2,7 @@ package redact
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"testing"
 
@@ -46,8 +47,9 @@ func FuzzRedactLine(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if _, err := parseJSON(out); err != nil {
-			t.Fatalf("output is not valid JSON: %v\n in %q\nout %q", err, line, out)
+		// encoding/json checks the output independently of my own parser.
+		if !json.Valid(out) {
+			t.Fatalf("output is not valid JSON\n in %q\nout %q", line, out)
 		}
 		again, _, err := e.RedactLine(out, nil)
 		if err != nil || !bytes.Equal(again, out) {
