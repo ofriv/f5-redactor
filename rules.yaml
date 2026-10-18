@@ -57,8 +57,10 @@ value_rules:
     pattern: 'eyJ[A-Za-z0-9_+/=-]+(?:\.[A-Za-z0-9_+/=-]+){1,4}'
     action: mask
 
+  # 13 to 19 digits, optionally grouped with single spaces or dashes
+  # ("4111 1111 1111 1111", "5555-5555-5555-4444"). Luhn runs on the digits.
   - name: credit-card
-    pattern: '\b\d{13,19}\b'
+    pattern: '\b\d(?:[ -]?\d){12,18}\b'
     validator: luhn
     action: partial
 
