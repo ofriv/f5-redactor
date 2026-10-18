@@ -57,7 +57,7 @@ is never passed through unredacted.
 **Tests**
 
 ```bash
-go test ./...            # 370 tests; -short skips the 256 MiB memory test
+go test ./...            # 397 tests; -short skips the 256 MiB memory test
 go test -race ./...
 go test ./internal/redact -run '^$' -fuzz FuzzRedactLine -fuzztime 60s
 go test ./internal/stream -run '^$' -bench . -benchtime 5s
@@ -67,7 +67,13 @@ The tests that matter most:
 
 - `TestNoSecretLeaks`: every secret in `input.ndjson` (68 values) is
   absent from stdout and stderr. `TestNoLeaksInHardCases` does the same
-  for cases found in a second, adversarial review.
+  for cases found in two adversarial reviews.
+- `TestGeneratedLeakCorpus`: 1,250 generated lines hide secrets in every
+  combination of field-name spelling (35, from `password` to `X-API-KEY`),
+  place (JSON at any depth, JSON inside strings up to 5 levels, forms, query
+  strings, URLs, XML, multipart, free text, headers) and value shape (cards,
+  emails, JWTs, API keys). None may survive. Its first run found 6 kinds of
+  leaks, now fixed.
 - `TestExpectedOutput`: a full run equals `cmd/redactor/testdata/`, which I
   reviewed line by line. Regenerate with `-update` after an intended change.
 - `TestRedactLineSampleInput` and the fuzz tests: no panic, valid JSON out,
@@ -76,6 +82,9 @@ The tests that matter most:
   line 2, so a buffering server would deadlock.
 - `TestMemoryStaysFlat`: 256 MiB through the pipeline, heap stays under
   32 MiB.
+- `TestManyConcurrentClients`: 60 clients at once under `-race`, a fifth of
+  them hanging up halfway; every full response is correct and no goroutine
+  is left behind.
 
 ## 2. Design and trade-offs
 
@@ -173,6 +182,11 @@ sample, in unit tests and by fuzzing (millions of inputs).
   body strings are re-processed the same way now.
 - `partial` on a value of 4 characters or less masks all of it, since keeping
   "the last 4" would reveal everything (line 38, `"card_number": "1234"`).
+- A card found inside a run of digit groups redacts the whole run. Redacting
+  each card separately keeps 4 digits of each, and those 4 plus the next
+  group can form a new card-length run that passes Luhn (all zeros do), so
+  every run of the tool found one more. The fuzzer found this with a long
+  run of zeros.
 
 ### 2.6 Choices for threat detection
 
@@ -197,12 +211,23 @@ Allowed by the brief if documented:
 - `group: N` on a value rule: redact only that capture group, so the name
   next to the value stays.
 
-Rules added or changed: `credential-headers` (any header whose name contains
-token, secret, session, password, credential or signature), `secret-fields`
-now also matches camelCase (`accessToken`), `pii-fields` (ssn, phone, date of
-birth, hashed), and `secret-assignment`, `json-secret`, `xml-secret`,
-`multipart-secret` for secrets in text, broken JSON, XML and multipart
-bodies. The email rule also matches `%40`.
+Rules added or changed:
+
+- `secret-fields` also matches camelCase and kebab-case (`accessToken`,
+  `access-token`) and more names (`private_key`, `bearer_token`, ...);
+  names are matched with surrounding spaces ignored.
+- `credential-headers`: any header whose name contains token, secret,
+  session, password, pwd, credential, signature or api-key.
+- `pii-fields`: ssn, phone, date of birth, hashed.
+- `api-key-prefix` also knows GitHub, GitLab, Slack, Google API keys, AWS
+  access key ids and Stripe restricted keys.
+- New value rules: `url-credentials` (`https://user:****@host`),
+  `pem-private-key`, `http-header-dump` (`Authorization:` and `Cookie:`
+  written as text, as in a raw request in a log), and `secret-assignment`,
+  `json-secret`, `xml-secret`, `multipart-secret` for named secrets in text
+  (quoted or not), broken or deeply nested JSON, XML and multipart bodies.
+  The four share one list of names.
+- The email rule also matches `%40` and international domains.
 
 ## 3. The JWT report
 
@@ -274,9 +299,11 @@ created a new leak, the 17-digit run above, fixed in the next commit.
   1), and in a redactor a corrupted ID is better than a leaked card. Next
   step: an optional `card` validator for users who want the trade the other
   way.
-- **Neighbouring digits may be over-masked** when a run of digits around a
-  card passes Luhn by chance.
-- **Not decoded:** base64 or compressed bodies, cards written with dots.
+- **Neighbouring digits are over-masked:** a card inside a run of digit
+  groups masks the whole run, so two cards separated only by a space keep
+  only the last 4 digits of the second.
+- **Not decoded:** base64 or compressed bodies, cards written with dots or
+  with non-ASCII digits.
   Personal data is found by field name only (no phone numbers in free text,
   no names).
 - **Hashes and correlation:** with HMAC, rotating the key changes every
