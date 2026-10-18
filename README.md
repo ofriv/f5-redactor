@@ -24,6 +24,7 @@ cat input.ndjson | ./redactor --rules rules.yaml                # stdin
 |---|---|---|
 | `--rules` | `rules.yaml` | rules file |
 | `--max-line-bytes` | 10 MiB | longer lines are rejected without being read into memory |
+| `--workers` | CPU count | lines redacted in parallel; the output keeps the input order |
 | `--summary-format` | `text` | `json` prints the summary as one JSON line |
 | `--check-config` | | validate the rules and exit |
 | `--serve`, `--addr` | `:8080` | run the HTTP service |
@@ -98,15 +99,26 @@ that cannot be parsed becomes an error record.
 - Lines are read with `bufio.Reader.ReadSlice` in 64 KiB pieces. A line over
   `--max-line-bytes` is dropped piece by piece and never held whole.
   (`bufio.Scanner` would fail on lines over 64 KiB.)
-- Memory is O(longest accepted line), independent of input size. Time is
+- Memory is O(longest accepted line + one 1 MiB batch), independent of
+  input size. Time is
   O(input size × number of rules); Go's RE2 regex engine is linear, so no
   input can make a pattern backtrack.
-- Measured on an Apple M5, one core: 3.6 MB/s on the sample; a 256 MiB
-  input took 75 s with 20 MiB peak RSS; `TestMemoryStaysFlat` peaks at
-  4 MiB of heap. Most of the time is regex matching (see 5).
-- The worst line for memory is one full of short values: each becomes a tree
-  node and a redacted copy, about 12x the line in total. A line may hold at
-  most 200,000 JSON values; more is rejected as `too_many_values`.
+- Lines are redacted in parallel by `--workers` goroutines. The reader takes
+  the lines already waiting in the input, up to 1 MiB, redacts them at once
+  and writes them back in input order; the engine is read-only after
+  loading, so this needs no locks. A batch ends as soon as no full line is
+  waiting, so a client sending one line at a time still gets each line back
+  at once. A test checks that 1, 2 and 8 workers give byte-identical output,
+  warnings and summary.
+- Measured on an Apple M5 (4 performance and 6 efficiency cores): a 256 MiB
+  input took 23.5 s with the default workers (11.4 MB/s, 28 MiB peak RSS)
+  and 79 s with one (3.4 MB/s, 20 MiB); `TestMemoryStaysFlat` peaks at
+  under 7 MiB of heap. Most of the time is regex matching (see 5).
+- The worst line for memory is one full of short emails: each 6-character
+  email becomes a 71-character hash, so the line grows 10x and is then
+  scanned again. Measured at about 100x the line (four such 1 MiB lines at
+  once: 397 MiB peak). A line may also hold at most 200,000 JSON values;
+  more is rejected as `too_many_values`.
 - Output is flushed whenever no complete input line is waiting. A client
   streaming lines (or `tail -f | redactor`) gets each line back at once; a
   big upload is still written in large blocks.
@@ -301,9 +313,9 @@ The pods wait for the Secret and start once it exists.
   Non-root, read-only root filesystem, all capabilities dropped, seccomp, no
   service account token; the namespace enforces the `restricted` Pod Security
   Standard.
-- **Resources:** memory limit 1Gi with `--max-concurrent=8` and
-  `--max-line-bytes=4194304`: the worst case is about 8 requests × 4 MiB
-  lines × 12 (2.1), about 400 MiB.
+- **Resources:** memory limit 1Gi with `--max-concurrent=4` and
+  `--max-line-bytes=1048576`: the worst case measured with the most
+  expensive 1 MiB line (2.1) is 397 MiB. A longer line gets an error record.
   `GOMEMLIMIT=900MiB` so the garbage collector works harder before the limit.
   No CPU limit: it would throttle the pod even with idle CPU on the node.
 - **Rules:** a ConfigMap from kustomize's `configMapGenerator`, whose name
@@ -354,13 +366,13 @@ The pods wait for the Secret and start once it exists.
 - **Hashes and correlation:** with HMAC, rotating the key changes every
   hash; a key id in the prefix (`hmac-sha256:k2:`) would keep old logs
   comparable.
-- **Throughput:** 3.6 MB/s on one core, most of it in regex matching.
-  Matching secret names with any prefix (`newPassword`) costs about a third
-  of it, since the name list is tried at every letter rather than only at
-  word starts. Next: a cheap per-rule prefilter (no `@`, no email search)
-  and a worker pool that keeps output order.
-- **Not done from the bonus list:** worker pool, Prometheus metrics, hot
-  reload of the rules (in Kubernetes a rules change already rolls the pods).
+- **Throughput:** 3.4 MB/s per core, most of it in regex matching; the
+  provided rules alone run about 5x faster. Matching secret names with any
+  prefix (`newPassword`) costs about a third of it, since the name list is
+  tried at every letter rather than only at word starts. Next: a cheap
+  per-rule prefilter (no `@`, no email search).
+- **Not done from the bonus list:** Prometheus metrics, hot reload of the
+  rules (in Kubernetes a rules change already rolls the pods).
 - **Service:** no authentication (meant to run inside the cluster behind a
   NetworkPolicy, not included), no request compression.
 

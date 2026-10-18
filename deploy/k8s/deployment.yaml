@@ -41,12 +41,13 @@ spec:
             - --serve
             - --addr=:8080
             - --rules=/etc/redactor/rules.yaml
-            # Worst-case memory is measured at about 12x the longest line
-            # (a line full of short values, each becoming a parsed node and a
-            # redacted copy). 8 requests x 4 MiB lines x 12 = about 400 MiB,
-            # well under GOMEMLIMIT (900MiB) and the 1Gi limit.
-            - --max-line-bytes=4194304
-            - --max-concurrent=8
+            # Worst-case memory is about 100x the longest line: a line full
+            # of short emails, each hashed into a 10x longer string that is
+            # then scanned again. Measured: 4 requests of such 1 MiB lines
+            # peak at 397 MiB, well under GOMEMLIMIT (900MiB) and the 1Gi
+            # limit. Longer lines are rejected with an error record.
+            - --max-line-bytes=1048576
+            - --max-concurrent=4
             - --shutdown-delay=5s
           ports:
             - name: http
