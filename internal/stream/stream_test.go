@@ -11,7 +11,7 @@ import (
 	"f5-redactor/internal/redact"
 )
 
-func testEngine(t *testing.T) *redact.Engine {
+func testEngine(t testing.TB) *redact.Engine {
 	t.Helper()
 	cfg, err := config.Load("../../rules.yaml")
 	if err != nil {
