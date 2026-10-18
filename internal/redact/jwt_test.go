@@ -70,7 +70,8 @@ func TestJWTPattern(t *testing.T) {
 	}{
 		{"base64url with _ and -", "t " + jwtShort + " end", "t **** end"},
 		{"underscore only in the signature", "t " + jwtJohnDoe, "t ****"},
-		{"standard base64 characters still caught", "t eyJhbGciOiJIUzI1NiJ9.eyJhIjoiKz8vIn0+/=.c2ln+/ end", "t **** end"},
+		{"token in a url path keeps the rest of the path", "/v1/" + jwtShort + "/users/42/orders", "/v1/****/users/42/orders"},
+		{"padded segments", "t eyJhbGciOiJIUzI1NiJ9.eyJhIjoiYiJ9==.c2ln end", "t **** end"},
 		// alg "none": the signature is empty. The trailing dot stays, which
 		// leaks nothing.
 		{"unsigned token", "t eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0. end", "t ****. end"},

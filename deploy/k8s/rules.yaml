@@ -84,11 +84,12 @@ value_rules:
     pattern: '[\p{L}\p{N}._%+-]+(?:@|%40)[\p{L}\p{N}.-]+\.\p{L}{2,}'
     action: hash
 
-  # JWTs are base64url (RFC 7515): "-" and "_", not "+" and "/". Both
-  # alphabets are accepted so that non-standard tokens are caught too.
+  # JWTs are base64url (RFC 7515): "-" and "_", not "+" and "/". "/" is left
+  # out on purpose: with it, a token in a URL path also swallowed the rest of
+  # the path (/v1/eyJ.../users/42). "=" is kept for producers that pad.
   # 2 to 5 segments: a signed JWT has 3, an encrypted one (JWE) has 5.
   - name: jwt
-    pattern: 'eyJ[A-Za-z0-9_+/=-]+(?:\.[A-Za-z0-9_+/=-]+){1,4}'
+    pattern: 'eyJ[A-Za-z0-9_=-]+(?:\.[A-Za-z0-9_=-]+){1,4}'
     action: mask
 
   # 13 to 19 digits, optionally grouped with single spaces or dashes
