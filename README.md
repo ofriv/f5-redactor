@@ -72,6 +72,9 @@ go test ./internal/redact -run '^$' -fuzz FuzzRedactLine -fuzztime 60s
 go test ./internal/stream -run '^$' -bench . -benchtime 5s
 ```
 
+GitHub Actions runs `go vet`, the tests with `-race` and the Docker build
+on every push (`.github/workflows/ci.yml`).
+
 The tests that matter most:
 
 - `TestNoSecretLeaks`: every secret in `input.ndjson` (68 values) is
