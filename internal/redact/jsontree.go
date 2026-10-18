@@ -14,6 +14,14 @@ import (
 // goes deeper is rejected instead of risking unbounded recursion.
 const maxDepth = 100
 
+// maxValues limits how many JSON values (strings, numbers, objects, ...) one
+// line may hold. Each value becomes a tree node of about 100 bytes, so a
+// 10 MiB line of "[1,1,1,...]" (5 million values) would need over 500 MiB.
+// 200,000 values caps that at about 20 MiB per line, far above what a real
+// API transaction holds. A line over the limit is rejected like a too-long
+// line.
+const maxValues = 200_000
+
 var (
 	// ErrEmpty means the line holds only whitespace.
 	ErrEmpty = errors.New("empty_line")
@@ -21,6 +29,8 @@ var (
 	ErrInvalidJSON = errors.New("invalid_json")
 	// ErrTooDeep means the line nests deeper than maxDepth.
 	ErrTooDeep = errors.New("too_deep")
+	// ErrTooManyValues means the line holds more than maxValues values.
+	ErrTooManyValues = errors.New("too_many_values")
 )
 
 // Why not decode into map[string]any? A Go map drops duplicate keys (line 25
@@ -66,7 +76,8 @@ func parseJSON(data []byte) (*node, error) {
 	if err != nil {
 		return nil, ErrInvalidJSON
 	}
-	n, err := parseFrom(dec, tok, 0)
+	values := 0
+	n, err := parseFrom(dec, tok, 0, &values)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +87,10 @@ func parseJSON(data []byte) (*node, error) {
 	return n, nil
 }
 
-func parseFrom(dec *json.Decoder, tok json.Token, depth int) (*node, error) {
+func parseFrom(dec *json.Decoder, tok json.Token, depth int, values *int) (*node, error) {
+	if *values++; *values > maxValues {
+		return nil, ErrTooManyValues
+	}
 	switch v := tok.(type) {
 	case nil:
 		return &node{kind: kindNull}, nil
@@ -91,16 +105,16 @@ func parseFrom(dec *json.Decoder, tok json.Token, depth int) (*node, error) {
 			return nil, ErrTooDeep
 		}
 		if v == '{' {
-			return parseObject(dec, depth)
+			return parseObject(dec, depth, values)
 		}
 		if v == '[' {
-			return parseArray(dec, depth)
+			return parseArray(dec, depth, values)
 		}
 	}
 	return nil, ErrInvalidJSON
 }
 
-func parseObject(dec *json.Decoder, depth int) (*node, error) {
+func parseObject(dec *json.Decoder, depth int, values *int) (*node, error) {
 	n := &node{kind: kindObject}
 	for dec.More() {
 		keyTok, err := dec.Token()
@@ -111,7 +125,7 @@ func parseObject(dec *json.Decoder, depth int) (*node, error) {
 		if !ok {
 			return nil, ErrInvalidJSON
 		}
-		value, err := parseNext(dec, depth+1)
+		value, err := parseNext(dec, depth+1, values)
 		if err != nil {
 			return nil, err
 		}
@@ -123,10 +137,10 @@ func parseObject(dec *json.Decoder, depth int) (*node, error) {
 	return n, nil
 }
 
-func parseArray(dec *json.Decoder, depth int) (*node, error) {
+func parseArray(dec *json.Decoder, depth int, values *int) (*node, error) {
 	n := &node{kind: kindArray}
 	for dec.More() {
-		item, err := parseNext(dec, depth+1)
+		item, err := parseNext(dec, depth+1, values)
 		if err != nil {
 			return nil, err
 		}
@@ -138,12 +152,12 @@ func parseArray(dec *json.Decoder, depth int) (*node, error) {
 	return n, nil
 }
 
-func parseNext(dec *json.Decoder, depth int) (*node, error) {
+func parseNext(dec *json.Decoder, depth int, values *int) (*node, error) {
 	tok, err := dec.Token()
 	if err != nil {
 		return nil, ErrInvalidJSON
 	}
-	return parseFrom(dec, tok, depth)
+	return parseFrom(dec, tok, depth, values)
 }
 
 // appendJSON writes n as compact JSON. Writing it by hand (instead of with

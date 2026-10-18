@@ -101,6 +101,17 @@ func TestParseJSONErrors(t *testing.T) {
 	}
 }
 
+func TestParseJSONValueLimit(t *testing.T) {
+	array := func(n int) string { return "[" + strings.TrimSuffix(strings.Repeat("1,", n), ",") + "]" }
+	// The array itself is one value, so maxValues-1 items fit exactly.
+	if _, err := parseJSON([]byte(array(maxValues - 1))); err != nil {
+		t.Errorf("%d values rejected: %v", maxValues, err)
+	}
+	if _, err := parseJSON([]byte(array(maxValues))); !errors.Is(err, ErrTooManyValues) {
+		t.Errorf("%d values: err = %v, want ErrTooManyValues", maxValues+1, err)
+	}
+}
+
 func TestParseJSONMaxDepthAllowed(t *testing.T) {
 	in := strings.Repeat("[", maxDepth) + strings.Repeat("]", maxDepth)
 	if got := roundTrip(t, in); got != in {

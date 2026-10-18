@@ -36,8 +36,8 @@ var integerLiteral = regexp.MustCompile(`^-?[0-9]+$`)
 // redacted JSON. Redactions are added to counts.
 //
 // On error the line could not be parsed and nothing should be written from
-// it; the error is one of ErrEmpty, ErrInvalidJSON or ErrTooDeep and never
-// contains input data. notice is non-empty for a line that was redacted but
+// it; the error is one of ErrEmpty, ErrInvalidJSON, ErrTooDeep or
+// ErrTooManyValues and never contains input data. notice is non-empty for a line that was redacted but
 // is unusual (see NoticeNotObject).
 func (e *Engine) RedactLine(line []byte, counts Counts) (out []byte, notice string, err error) {
 	root, err := parseJSON(line)
