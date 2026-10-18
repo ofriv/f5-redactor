@@ -122,6 +122,12 @@ func TestNoLeaksInHardCases(t *testing.T) {
 		`{"body":{"note":"accessToken=txt-AT-787 and clientSecret: txt-cs-898, contact enc%40example.com"}}`,
 		// a top-level field that is not part of the transaction
 		`{"user":{"password":"top-pw-909"}}`,
+		// third round: URL passwords, PEM keys, known token formats, raw
+		// HTTP requests in text, names with spaces, quoted values
+		`{"body":{"db":"https://admin:url-pw-102@localhost:8080/x","key":"-----BEGIN PRIVATE KEY-----\npem-key-103\n-----END PRIVATE KEY-----"}}`,
+		`{"body":{"note":"ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789 xoxb-1234567890-slack-104abc AKIAIOSFODNN7EXAMPLE"}}`,
+		`{"body":"GET / HTTP/1.1\r\nAuthorization: Bearer dump-auth-107\r\nCookie: sid=dump-ck-108\r\n"}`,
+		`{"body":{"password ":"space-pw-109","note":"cfg password: \"quoted pw-110\""}}`,
 	}
 	_, stdout, stderr := runCLI(t, strings.Join(lines, "\n")+"\n", "--rules", rulesFile)
 
@@ -129,6 +135,8 @@ func TestNoLeaksInHardCases(t *testing.T) {
 		"opaque-AT-111", "opaque-RT-222", "cs-333", "as-444", "pk-555", "tok-666", "st-777",
 		"hdr-AT-888", "csrf-999", "amz-000", "sid-121", "url-tok-343", "ref-sess-454",
 		"xml-pw-565", "multipart-pw-676", "txt-AT-787", "txt-cs-898", "enc%40example.com", "top-pw-909",
+		"url-pw-102", "pem-key-103", "ghp_aBcD", "slack-104", "AKIAIOSFODNN7", "dump-auth-107", "dump-ck-108",
+		"space-pw-109", "pw-110",
 	} {
 		if strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {
 			t.Errorf("%q leaked", secret)

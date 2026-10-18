@@ -19,20 +19,21 @@ key_rules:
     action: mask
     preserve_scheme: true
 
-  # Any other header whose name says it carries a credential: X-Access-Token,
-  # X-CSRF-Token, X-Amz-Security-Token, X-Session-Id, ... A name that only
-  # looks like one costs little; a missed credential leaks.
-  - name: credential-headers
-    scope: headers
-    match:
-      regex: '(?i)(token|secret|session|password|credential|signature)'
-    action: mask
-
   - name: api-key-names
     scope: any
     match:
       regex: '(?i)^(x-)?api[_-]?key$'
     action: hash
+
+  # Any other header whose name says it carries a credential: X-Access-Token,
+  # X-CSRF-Token, X-Amz-Security-Token, X-Session-Id, X-Goog-Api-Key, ...
+  # A name that only looks like one costs little; a missed credential leaks.
+  # It comes after api-key-names, so X-Api-Key is still hashed.
+  - name: credential-headers
+    scope: headers
+    match:
+      regex: '(?i)(token|secret|session|passw(?:or)?d|pwd|passphrase|credential|signature|private[_-]?key|api[_-]?key)'
+    action: mask
 
   # [_-]? accepts snake_case, kebab-case and camelCase: access_token,
   # access-token and accessToken. The ^...$ anchors keep look-alikes such as
@@ -65,13 +66,16 @@ key_rules:
 
 # value_rules match on the CONTENT of any string value, whatever its key is called.
 #   validator (optional): the match only counts if the validator accepts it. Supported: luhn
-#   group (optional): redact only this capture group of the match, not all of it
+#   group (optional): redact only this capture group of the match, not all of
+#     it. With alternatives, the first group from this one on that took part.
 value_rules:
   # Also percent-encoded (%40 for @), as in a URL or form written as text:
   # "contact bob%40example.com". In a parsed form or query string the value
   # is decoded first, so there the plain form matches.
+  # Letters and digits in any script, so international domains match too
+  # (user@exämple.com).
   - name: email
-    pattern: '[A-Za-z0-9._%+-]+(?:@|%40)[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+    pattern: '[\p{L}\p{N}._%+-]+(?:@|%40)[\p{L}\p{N}.-]+\.\p{L}{2,}'
     action: hash
 
   # JWTs are base64url (RFC 7515): "-" and "_", not "+" and "/". Both
@@ -88,8 +92,30 @@ value_rules:
     validator: luhn
     action: partial
 
+  # Tokens with a well-known format: Stripe secret and restricted keys,
+  # GitHub, GitLab, Slack, Google API keys and AWS access key ids.
   - name: api-key-prefix
-    pattern: '\bsk_(?:live|test)_[A-Za-z0-9]+\b'
+    pattern: '\b(?:(?:sk|rk)_(?:live|test)_[A-Za-z0-9]+|gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255}|glpat-[A-Za-z0-9_-]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|(?:AKIA|ASIA)[0-9A-Z]{16})\b'
+    action: mask
+
+  # A password inside a URL: scheme://user:password@host. Only the password
+  # is masked.
+  - name: url-credentials
+    pattern: '(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@"]*:([^/\s@"]+)@'
+    group: 1
+    action: mask
+
+  # A PEM private key block, start to end.
+  - name: pem-private-key
+    pattern: '-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----'
+    action: mask
+
+  # Authorization and Cookie headers written as text, as in a raw HTTP
+  # request copied into a log. The auth scheme stays, the rest of the line
+  # is masked.
+  - name: http-header-dump
+    pattern: '(?i)\b(?:(?:proxy-)?authorization\s*:\s*(?:(?:Bearer|Basic|Digest|Token|Negotiate)\s+)?|(?:set-)?cookie\s*:\s*)([^\r\n"]+)'
+    group: 1
     action: mask
 
   # The rules below find a secret by the name written next to it, in text
@@ -98,23 +124,24 @@ value_rules:
   # all four.
 
   # name=value or name: value in free text, e.g. a debug log line
-  # "login attempt password=hunter2". An auth scheme before the value is
-  # kept: "token: Bearer abc" becomes "token: Bearer ****".
+  # "login attempt password=hunter2". The value may be quoted
+  # (password: "my pass"); the quotes stay. An auth scheme before the value
+  # is kept: "token: Bearer abc" becomes "token: Bearer ****".
   - name: secret-assignment
-    pattern: '(?i)\b(?:password|passwd|pwd|passphrase|secret|client[_-]?secret|api[_-]?secret|private[_-]?key|token|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|session(?:[_-]?(?:id|token))?|api[_-]?key)\s*[=:]\s*(?:(?:Bearer|Basic|Token)\s+)?([^\s&,;"<]+)'
+    pattern: '(?i)\b(?:password|passwd|pwd|passphrase|secret|client[_-]?secret|api[_-]?secret|private[_-]?key|token|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|session(?:[_-]?(?:id|token))?|api[_-]?key)\s*[=:]\s*(?:(?:Bearer|Basic|Token)\s+)?(?:"([^"]*)"|''([^'']*)''|([^\s&,;"''<]+))'
     group: 1
     action: mask
 
   # "password":"value" in text: broken JSON, or JSON nested too deep in
-  # strings to be parsed.
+  # strings to be parsed, where the quotes are escaped (\"password\").
   - name: json-secret
-    pattern: '(?i)"(?:password|passwd|pwd|passphrase|secret|client[_-]?secret|api[_-]?secret|private[_-]?key|token|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|session(?:[_-]?(?:id|token))?|api[_-]?key)"\s*:\s*"([^"]*)"'
+    pattern: '(?i)\\*"(?:x[_-])?(?:password|passwd|pwd|passphrase|secret|client[_-]?secret|api[_-]?secret|private[_-]?key|token|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|session(?:[_-]?(?:id|token))?|api[_-]?key)\\*"\s*:\s*\\*"([^"\\]*)'
     group: 1
     action: mask
 
   # <password>value</password> in an XML body.
   - name: xml-secret
-    pattern: '(?i)<(?:[\w.-]+:)?(?:password|passwd|pwd|passphrase|secret|client[_-]?secret|api[_-]?secret|private[_-]?key|token|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|session(?:[_-]?(?:id|token))?|api[_-]?key)(?:\s[^>]*)?>([^<]+)<'
+    pattern: '(?i)<(?:[\w.-]+:)?(?:x[_-])?(?:password|passwd|pwd|passphrase|secret|client[_-]?secret|api[_-]?secret|private[_-]?key|token|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|session(?:[_-]?(?:id|token))?|api[_-]?key)(?:\s[^>]*)?>([^<]+)<'
     group: 1
     action: mask
 
@@ -123,6 +150,6 @@ value_rules:
   #   (blank line)
   #   hunter2
   - name: multipart-secret
-    pattern: '(?i)name="(?:password|passwd|pwd|passphrase|secret|client[_-]?secret|api[_-]?secret|private[_-]?key|token|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|session(?:[_-]?(?:id|token))?|api[_-]?key)"[^\r\n]*(?:\r?\n[^\r\n]+)*\r?\n\r?\n([^\r\n]+)'
+    pattern: '(?i)name="(?:x[_-])?(?:password|passwd|pwd|passphrase|secret|client[_-]?secret|api[_-]?secret|private[_-]?key|token|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|session(?:[_-]?(?:id|token))?|api[_-]?key)"[^\r\n]*(?:\r?\n[^\r\n]+)*\r?\n\r?\n([^\r\n]+)'
     group: 1
     action: mask

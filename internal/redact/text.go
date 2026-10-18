@@ -112,25 +112,34 @@ func (e *Engine) findMatches(s string) []match {
 		if r.Group > 0 {
 			// Only the capture group is redacted: "password=****" keeps
 			// the name, "<password>****</password>" keeps the XML.
+			// With alternatives ("a"|'a'|a), each has its own group; the
+			// first group from r.Group on that took part is the value.
 			for _, m := range r.Pattern.FindAllStringSubmatchIndex(s, -1) {
-				start, end := m[2*r.Group], m[2*r.Group+1]
-				if start < 0 || start == end {
-					continue // group did not take part, or matched nothing
+				for g := r.Group; 2*g+1 < len(m); g++ {
+					start, end := m[2*g], m[2*g+1]
+					if start < 0 {
+						continue // this alternative did not match
+					}
+					if start < end { // an empty value has nothing to hide
+						matches = append(matches, match{start: start, end: end, rule: i})
+					}
+					break
 				}
-				matches = append(matches, match{start: start, end: end, rule: i})
 			}
 			continue
 		}
+		var found []match
 		for _, m := range r.Pattern.FindAllStringIndex(s, -1) {
 			if m[0] == m[1] {
 				continue // empty match: nothing to redact
 			}
 			if validate(r.Validator, s[m[0]:m[1]]) {
-				matches = append(matches, match{start: m[0], end: m[1], rule: i})
+				found = append(found, match{start: m[0], end: m[1], rule: i})
 				continue
 			}
-			matches = e.rescueRejected(matches, i, s, m[0], m[1])
+			found = e.rescueRejected(found, i, s, m[0], m[1])
 		}
+		matches = append(matches, found...)
 	}
 
 	if len(matches) > 0 && strings.Contains(s, hashPrefix) {

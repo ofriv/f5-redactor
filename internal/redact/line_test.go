@@ -168,9 +168,11 @@ func TestRedactLine(t *testing.T) {
 			counts: Counts{},
 		},
 		{
+			// The text rule http-header-dump and the email rule overlap; the
+			// merged region gets the action of email, listed first.
 			name:   "headers that are not an object are still scanned",
 			in:     `{"headers":"Authorization: Bearer x a@b.com"}`,
-			want:   `{"headers":"Authorization: Bearer x ` + h("a@b.com") + `"}`,
+			want:   `{"headers":"Authorization: Bearer ` + h("x a@b.com") + `"}`,
 			counts: Counts{"email": 1},
 		},
 	}

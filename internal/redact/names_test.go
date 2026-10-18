@@ -48,7 +48,9 @@ func TestSecretAssignmentSpellings(t *testing.T) {
 	tests := []struct{ in, want string }{
 		{"accessToken=abc1 next", "accessToken=**** next"},
 		{"clientSecret: abc2", "clientSecret: ****"},
-		{"Cookie: session=abc3; theme=dark", "Cookie: session=****; theme=dark"},
+		// A cookie header written as text: the whole value is masked.
+		{"Cookie: session=abc3; theme=dark", "Cookie: ****"},
+		{"note session=abc3; theme=dark", "note session=****; theme=dark"},
 		{"sessionId=abc4", "sessionId=****"},
 		{"session expired, retry", "session expired, retry"},
 	}

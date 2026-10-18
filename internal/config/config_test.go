@@ -26,8 +26,8 @@ func TestLoadShippedRules(t *testing.T) {
 		action Action
 	}{
 		{"auth-headers", ScopeHeaders, ActionMask},
-		{"credential-headers", ScopeHeaders, ActionMask},
 		{"api-key-names", ScopeAny, ActionHash},
+		{"credential-headers", ScopeHeaders, ActionMask},
 		{"secret-fields", ScopeBody, ActionMask},
 		{"card-number-fields", ScopeBody, ActionPartial},
 		{"cvv-fields", ScopeBody, ActionRemove},
@@ -55,6 +55,9 @@ func TestLoadShippedRules(t *testing.T) {
 		{"jwt", "", ActionMask},
 		{"credit-card", ValidatorLuhn, ActionPartial},
 		{"api-key-prefix", "", ActionMask},
+		{"url-credentials", "", ActionMask},
+		{"pem-private-key", "", ActionMask},
+		{"http-header-dump", "", ActionMask},
 		{"secret-assignment", "", ActionMask},
 		{"json-secret", "", ActionMask},
 		{"xml-secret", "", ActionMask},

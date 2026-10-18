@@ -6,8 +6,8 @@ redactor: line 50: invalid_json
 redactor: 50 lines read, 48 written, 3 rejected, 2 empty skipped
 redactions by rule:
   auth-headers           8
-  credential-headers     0
   api-key-names          8
+  credential-headers     0
   secret-fields          13
   card-number-fields     5
   cvv-fields             1
@@ -16,6 +16,9 @@ redactions by rule:
   jwt                    2
   credit-card            17
   api-key-prefix         2
+  url-credentials        0
+  pem-private-key        0
+  http-header-dump       0
   secret-assignment      1
   json-secret            0
   xml-secret             0

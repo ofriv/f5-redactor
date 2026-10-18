@@ -87,6 +87,8 @@ type KeyRule struct {
 // authorization and AUTHORIZATION. Regex rules are applied as written, so a
 // regex that should ignore case must say so with (?i).
 func (r *KeyRule) Matches(name string) bool {
+	// Surrounding spaces do not change what a name means ("password ").
+	name = strings.TrimSpace(name)
 	if r.re != nil {
 		return r.re.MatchString(name)
 	}
@@ -106,8 +108,10 @@ type ValueRule struct {
 	Pattern   *regexp.Regexp
 	Validator string // "" or ValidatorLuhn
 	// Group, if set, redacts only that capture group of each match instead
-	// of the whole match: in "password=hunter2" only "hunter2". This is an
-	// extension of the provided config format.
+	// of the whole match: in "password=hunter2" only "hunter2". If the
+	// pattern has alternatives with a group each, the first group from Group
+	// on that took part is used. This is an extension of the provided config
+	// format.
 	Group  int
 	Action Action
 }
