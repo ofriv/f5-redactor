@@ -103,3 +103,35 @@ func compareGolden(t *testing.T, path, got string) {
 		}
 	}
 }
+
+// TestNoLeaksInHardCases runs the cases found by a second, adversarial review
+// of the rules, end to end through the CLI. Each line hides secrets in a
+// place the first version of the rules missed.
+func TestNoLeaksInHardCases(t *testing.T) {
+	lines := []string{
+		// camelCase and other spellings of secret field names
+		`{"body":{"accessToken":"opaque-AT-111","refreshToken":"opaque-RT-222","clientSecret":"cs-333","apiSecret":"as-444","privateKey":"pk-555","authToken":"tok-666","sessionToken":"st-777"}}`,
+		// credential headers that are not in the auth-headers list
+		`{"headers":{"X-Access-Token":"hdr-AT-888","X-CSRF-Token":"csrf-999","X-Amz-Security-Token":"amz-000","X-Session-Id":"sid-121"}}`,
+		// a URL in a field, a session in a Referer header
+		`{"body":{"url":"https://x.example/cb?token=url-tok-343&state=1"},"headers":{"Referer":"https://x.example/?session=ref-sess-454"}}`,
+		// XML and multipart bodies
+		`{"body":"<login><password>xml-pw-565</password></login>","headers":{"Content-Type":"application/xml"}}`,
+		`{"body":"--b\r\nContent-Disposition: form-data; name=\"password\"\r\n\r\nmultipart-pw-676\r\n--b--"}`,
+		// camelCase names in free text, an encoded email in text
+		`{"body":{"note":"accessToken=txt-AT-787 and clientSecret: txt-cs-898, contact enc%40example.com"}}`,
+		// a top-level field that is not part of the transaction
+		`{"user":{"password":"top-pw-909"}}`,
+	}
+	_, stdout, stderr := runCLI(t, strings.Join(lines, "\n")+"\n", "--rules", rulesFile)
+
+	for _, secret := range []string{
+		"opaque-AT-111", "opaque-RT-222", "cs-333", "as-444", "pk-555", "tok-666", "st-777",
+		"hdr-AT-888", "csrf-999", "amz-000", "sid-121", "url-tok-343", "ref-sess-454",
+		"xml-pw-565", "multipart-pw-676", "txt-AT-787", "txt-cs-898", "enc%40example.com", "top-pw-909",
+	} {
+		if strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {
+			t.Errorf("%q leaked", secret)
+		}
+	}
+}

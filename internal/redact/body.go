@@ -83,16 +83,27 @@ func (e *Engine) redactPath(path string, counts Counts) string {
 // change are copied byte for byte; only changed parts are encoded again, so
 // the output stays readable ("password=****", not "password=%2A%2A%2A%2A")
 // and a second run changes nothing.
+//
+// A form-shaped string can also be a whole URL ("https://x/cb?token=abc&s=1"):
+// the first pair's name is then "https://x/cb?token". The part up to the last
+// "?" is the URL, redacted as text, and the rest is the real field name.
 func (e *Engine) redactForm(form string, where config.Scope, counts Counts) string {
 	pairs := strings.Split(form, "&")
 	kept := pairs[:0]
+	carry := "" // a URL prefix waiting for the next pair that is kept
 	for _, pair := range pairs {
 		rawKey, rawValue, hasValue := strings.Cut(pair, "=")
+		if i := strings.LastIndexByte(rawKey, '?'); i >= 0 {
+			carry += e.RedactText(rawKey[:i+1], counts)
+			rawKey = rawKey[i+1:]
+			pair = pair[i+1:]
+		}
 		key, errKey := url.QueryUnescape(rawKey)
 		value, errValue := url.QueryUnescape(rawValue)
 		if errKey != nil || errValue != nil {
 			// Broken percent-encoding: treat the pair as plain text.
-			kept = append(kept, e.RedactText(pair, counts))
+			kept = append(kept, carry+e.RedactText(pair, counts))
+			carry = ""
 			continue
 		}
 
@@ -119,10 +130,14 @@ func (e *Engine) redactForm(form string, where config.Scope, counts Counts) stri
 			rawValue = escapeFormComponent(newValue)
 		}
 		if hasValue || newValue != "" {
-			kept = append(kept, rawKey+"="+rawValue)
+			kept = append(kept, carry+rawKey+"="+rawValue)
 		} else {
-			kept = append(kept, rawKey)
+			kept = append(kept, carry+rawKey)
 		}
+		carry = ""
+	}
+	if carry != "" { // every pair after the URL was removed
+		kept = append(kept, carry)
 	}
 	return strings.Join(kept, "&")
 }

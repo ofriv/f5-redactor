@@ -213,6 +213,11 @@ func TestRedactForm(t *testing.T) {
 		{"encoded field name", "pass%77ord=x", "pass%77ord=****"},
 		{"value with spaces is re-encoded", "q=hi+a%40b.com", "q=hi%20" + Hash("a@b.com")},
 		{"empty form", "", ""},
+		// A URL written into a field: the name after "?" is the field.
+		{"url with a secret parameter", "https://x.example/cb?token=url-tok&state=1", "https://x.example/cb?token=****&state=1"},
+		{"url with an email in the path", "https://x.example/u/a@b.com?token=t", "https://x.example/u/" + Hash("a@b.com") + "?token=****"},
+		{"url whose first parameter is removed", "https://x.example/pay?cvv=123&page=2", "https://x.example/pay?page=2"},
+		{"url whose only parameter is removed", "https://x.example/pay?cvv=123", "https://x.example/pay?"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
