@@ -330,6 +330,12 @@ func TestKeyRuleMatches(t *testing.T) {
 		{"secret-fields", "passwordless", false},
 		{"secret-fields", "tokenizer", false},
 		{"secret-fields", "secret_santa", false},
+		// Form fields of nested objects (Rails, PHP): the name inside the
+		// last brackets counts.
+		{"secret-fields", "user[password]", true},
+		{"secret-fields", "user[password_confirmation]", true},
+		{"secret-fields", "user[name]", false},
+		{"secret-fields", "password[hint]", false},
 
 		{"card-number-fields", "card_number", true},
 		{"card-number-fields", "cardnumber", true},
@@ -338,6 +344,9 @@ func TestKeyRuleMatches(t *testing.T) {
 
 		{"cvv-fields", "cvv", true},
 		{"cvv-fields", "CVC", true},
+		{"cvv-fields", "card_cvv", true},
+		{"cvv-fields", "cvv_code", true},
+		{"cvv-fields", "securityCode", true},
 		{"cvv-fields", "cvv_hint", false},
 	}
 	for _, tt := range tests {

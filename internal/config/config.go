@@ -89,6 +89,15 @@ type KeyRule struct {
 func (r *KeyRule) Matches(name string) bool {
 	// Surrounding spaces do not change what a name means ("password ").
 	name = strings.TrimSpace(name)
+	// Forms write fields of nested objects as user[password] (Rails, PHP):
+	// the name inside the last brackets counts too.
+	if i := strings.LastIndexByte(name, '['); i >= 0 && strings.HasSuffix(name, "]") && r.matches(name[i+1:len(name)-1]) {
+		return true
+	}
+	return r.matches(name)
+}
+
+func (r *KeyRule) matches(name string) bool {
 	if r.re != nil {
 		return r.re.MatchString(name)
 	}

@@ -178,6 +178,25 @@ func TestRedactLine(t *testing.T) {
 			counts: Counts{"http-header-dump": 1},
 		},
 		{
+			// Some loggers wrap the request like the response.
+			name:   "headers inside a request object",
+			in:     `{"request":{"headers":{"X-Auth-Key":"cfkey123456","Ocp-Apim-Subscription-Key":"k1","Accept":"*/*"},"body":{"password":"p"}}}`,
+			want:   `{"request":{"headers":{"X-Auth-Key":"****","Ocp-Apim-Subscription-Key":"****","Accept":"*/*"},"body":{"password":"****"}}}`,
+			counts: Counts{"credential-headers": 2, "secret-fields": 1},
+		},
+		{
+			name:   "nested form fields and python-style text",
+			in:     `{"headers":{"Content-Type":"application/x-www-form-urlencoded"},"body":"user[password]=hunter2&user[name]=bob","response":{"body":"{'password': 'hunter3'}"}}`,
+			want:   `{"headers":{"Content-Type":"application/x-www-form-urlencoded"},"body":"user[password]=****&user[name]=bob","response":{"body":"{'password': '****'}"}}`,
+			counts: Counts{"secret-fields": 1, "secret-assignment": 1},
+		},
+		{
+			name:   "multipart field of a nested object",
+			in:     `{"body":"--b\r\nContent-Disposition: form-data; name=\"user[password]\"\r\n\r\nhunter2\r\n--b--"}`,
+			want:   `{"body":"--b\r\nContent-Disposition: form-data; name=\"user[password]\"\r\n\r\n****\r\n--b--"}`,
+			counts: Counts{"multipart-secret": 1},
+		},
+		{
 			// HAR files and many proxies log headers as a list of
 			// name/value objects; the header rule for the name applies.
 			name:   "headers as a list of name/value objects",

@@ -33,7 +33,7 @@ key_rules:
   - name: credential-headers
     scope: headers
     match:
-      regex: '(?i)(auth|cookie|csrf|xsrf|token|secret|session|passw(?:or)?d|pwd|passphrase|credential|signature|private[_-]?key|api[_-]?key)'
+      regex: '(?i)(auth|cookie|csrf|xsrf|token|secret|session|passw(?:or)?d|pwd|passphrase|credential|signature|private[_-]?key|api[_-]?key|access[_-]?key|master[_-]?key|subscription[_-]?key|functions?[_-]?key)'
     action: mask
 
   # A field whose name ENDS with one of these words: password, newPassword,
@@ -49,7 +49,7 @@ key_rules:
   - name: secret-fields
     scope: body
     match:
-      regex: '(?i)(?:(?:password|passwd|pwd|passphrase|secret|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth)s?|token|(?:^|access|refresh|id|auth|api|bearer|session|csrf|xsrf)[_-]?tokens)$'
+      regex: '(?i)(?:(?:password|passwd|pwd|passphrase|secret|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth)s?|token|(?:^|access|refresh|id|auth|api|bearer|session|csrf|xsrf)[_-]?tokens|(?:password|passwd|pwd)[_-]?(?:confirm(?:ation)?|again|repeat|2))$'
     action: mask
 
   - name: card-number-fields
@@ -61,7 +61,7 @@ key_rules:
   - name: cvv-fields
     scope: body
     match:
-      regex: '(?i)^(cvv|cvc|cvv2)$'
+      regex: '(?i)^(?:(?:(?:card|cc)[_-]?)?(?:cvv2?|cvc2?|csc)(?:[_-]?code)?|(?:card[_-]?)?security[_-]?code)$'
     action: remove
 
   # Personal data. Hashed rather than masked: the same phone number showing
@@ -150,7 +150,7 @@ value_rules:
   # (password: "my pass"); the quotes stay. An auth scheme before the value
   # is kept: "token: Bearer abc" becomes "token: Bearer ****".
   - name: secret-assignment
-    pattern: '(?i)\b[\w-]*?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth|session)s?\s*[=:]\s*(?:(?:Bearer|Basic|Token)\s+)?(?:"([^"]*)"|''([^'']*)''|([^\s&,;"''<]+))'
+    pattern: '(?i)\b[\w-]*?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth|session)s?\]?''?\s*[=:]\s*(?:(?:Bearer|Basic|Token)\s+)?(?:"([^"]*)"|''([^'']*)''|([^\s&,;"''<]+))'
     group: 1
     action: mask
 
@@ -158,7 +158,7 @@ value_rules:
   # too deep in strings to be parsed, where the quotes are escaped
   # (\"password\").
   - name: json-secret
-    pattern: '(?i)\\*"[\w-]*?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth|session)s?\\*"\s*:\s*(?:\\*"([^"\\]*)|(-?\d[\d.eE+-]*|true|false))'
+    pattern: '(?i)\\*"[\w-]*?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth|session)s?\]?\\*"\s*:\s*(?:\\*"([^"\\]*)|(-?\d[\d.eE+-]*|true|false))'
     group: 1
     action: mask
 
@@ -173,6 +173,6 @@ value_rules:
   #   (blank line)
   #   hunter2
   - name: multipart-secret
-    pattern: '(?i)name="[\w-]*?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth|session)s?"[^\r\n]*(?:\r?\n[^\r\n]+)*\r?\n\r?\n([^\r\n]+)'
+    pattern: '(?i)name="[\w\[\]-]*?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth|session)s?\]?"[^\r\n]*(?:\r?\n[^\r\n]+)*\r?\n\r?\n([^\r\n]+)'
     group: 1
     action: mask

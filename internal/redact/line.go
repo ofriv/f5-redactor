@@ -93,7 +93,7 @@ func (e *Engine) redactObject(obj *node, w walk, counts Counts) {
 				e.redactNode(m.value, walk{where: config.ScopeBody, embedDepth: w.embedDepth, contentType: contentType}, counts)
 				kept = append(kept, m)
 				continue
-			case m.key == "response" && m.value.kind == kindObject:
+			case (m.key == "response" || m.key == "request") && m.value.kind == kindObject:
 				e.redactObject(m.value, inner, counts)
 				kept = append(kept, m)
 				continue

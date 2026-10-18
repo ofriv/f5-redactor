@@ -58,7 +58,7 @@ is never passed through unredacted.
 **Tests**
 
 ```bash
-go test ./...            # 418 tests; -short skips the 64 MiB memory test
+go test ./...            # 422 tests; -short skips the 64 MiB memory test
 go test -race ./...
 go test ./internal/redact -run '^$' -fuzz FuzzRedactLine -fuzztime 60s
 go test ./internal/stream -run '^$' -bench . -benchtime 5s
@@ -132,8 +132,8 @@ that cannot be parsed becomes an error record.
   (line 25), lose key order, and turn numbers into float64, which changes
   `12345678901234567890` and rewrites `1.0` as `1`. The tree writes the line
   back exactly, with `&` and `<` left as is.
-- Recursion is limited to 100 levels per document and 3 levels of JSON inside
-  a string, so a malicious line cannot exhaust the stack.
+- Recursion is limited to 1,000 levels per document and 3 levels of JSON
+  inside a string, so a malicious line cannot exhaust the stack.
 
 ### 2.3 Rule matching
 
@@ -143,7 +143,8 @@ that cannot be parsed becomes an error record.
   `"user"`, gets the body rules. A line that is valid JSON but not an object
   (`42`, an array) gets every rule, since its structure is unknown.
   Headers may also be a list of `{"name": ..., "value": ...}` objects, as in
-  HAR files; the header rule for the name then applies to the value.
+  HAR files; the header rule for the name then applies to the value. A
+  top-level `request` object is handled like `response`.
 - **Key rules**: first matching rule in file order wins. Exact names match
   case-insensitively (header names are case-insensitive). Under a matching
   key: `null` and `""` stay (nothing to hide, and an empty password is itself
@@ -243,10 +244,14 @@ Rules added or changed:
   `access-token`, `AWS_SECRET_ACCESS_KEY`, `sessionId`, `credentials`,
   plurals (`passwords`, `api_keys`), ...; `tokens` only alone or after a
   credential word (`access_tokens`), so counts like `max_tokens` stay;
-  names are matched with surrounding spaces ignored.
+  `password_confirmation` and `password2` too. Names are matched with
+  surrounding spaces ignored, and a form field of a nested object
+  (`user[password]`) by the name inside the brackets.
+- `cvv-fields` also matches `card_cvv`, `cvv_code` and `securityCode`.
 - `credential-headers`: any header whose name contains auth, cookie, token,
   secret, session, password, pwd, passphrase, credential, signature, csrf,
-  xsrf, private-key or api-key.
+  xsrf, or a private, api, access, master, subscription or functions key
+  (Azure's `Ocp-Apim-Subscription-Key`).
 - `pii-fields`: ssn, phone, date of birth, hashed.
 - `api-key-prefix` also knows GitHub, GitLab, Slack, Google API keys, AWS
   access key ids, Stripe restricted keys and webhook secrets, and OpenAI and
@@ -359,6 +364,15 @@ The pods wait for the Secret and start once it exists.
   rules.
 - **Over-masking of header names:** any header containing `auth` is masked,
   so `:authority` (the HTTP/2 host) and `X-Author` lose their value too.
+- **Cards glued to letters** (`card4111…`, magnetic-stripe track data
+  `%B4111…^`) are not found: the provided pattern requires a word boundary.
+  I kept it: without it, about 2.5% of 40-character hex IDs (commit hashes,
+  trace ids) contain a run of 13 or more digits, and a tenth of those pass
+  Luhn, so about 1 ID in 400 would be corrupted.
+- **Formats not understood:** headers as a list of pairs
+  (`[["Authorization", "..."]]`), XML `CDATA`, and JSON inside a string that
+  was cut off, where only the text rules run, so names known only to key
+  rules (`ssn`, `cvv`) are not found.
 - **Not decoded:** base64 or compressed bodies, cards written with dots or
   with non-ASCII digits.
   Personal data is found by field name only (no phone numbers in free text,

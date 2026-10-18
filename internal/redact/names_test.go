@@ -26,6 +26,7 @@ func TestSecretFieldSpellings(t *testing.T) {
 		"newPassword", "current_password", "db_password", "secretAccessKey", "AWS_SECRET_ACCESS_KEY",
 		"sessionId", "api_token", "csrf_token", "webhook_secret", "credentials", "authorization", "Cookie",
 		"passwords", "secrets", "api_keys", "cookies", "tokens", "access_tokens", "refreshTokens",
+		"password_confirmation", "passwordConfirm", "password2", "user[password]",
 	} {
 		in := `{"body":{"` + key + `":"s3cr3t-value"}}`
 		want := `{"body":{"` + key + `":"****"}}`
