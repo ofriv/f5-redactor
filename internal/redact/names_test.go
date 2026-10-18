@@ -46,10 +46,10 @@ func TestCredentialHeaders(t *testing.T) {
 func TestSecretAssignmentSpellings(t *testing.T) {
 	e := shippedEngine(t)
 	tests := []struct{ in, want string }{
-		{"accessToken=abc1 next", "**** next"},
-		{"clientSecret: abc2", "****"},
-		{"Cookie: session=abc3; theme=dark", "Cookie: ****; theme=dark"},
-		{"sessionId=abc4", "****"},
+		{"accessToken=abc1 next", "accessToken=**** next"},
+		{"clientSecret: abc2", "clientSecret: ****"},
+		{"Cookie: session=abc3; theme=dark", "Cookie: session=****; theme=dark"},
+		{"sessionId=abc4", "sessionId=****"},
 		{"session expired, retry", "session expired, retry"},
 	}
 	for _, tt := range tests {

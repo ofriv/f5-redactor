@@ -109,6 +109,18 @@ func (e *Engine) findMatches(s string) []match {
 	var matches []match
 	for i := range e.valueRules {
 		r := &e.valueRules[i]
+		if r.Group > 0 {
+			// Only the capture group is redacted: "password=****" keeps
+			// the name, "<password>****</password>" keeps the XML.
+			for _, m := range r.Pattern.FindAllStringSubmatchIndex(s, -1) {
+				start, end := m[2*r.Group], m[2*r.Group+1]
+				if start < 0 || start == end {
+					continue // group did not take part, or matched nothing
+				}
+				matches = append(matches, match{start: start, end: end, rule: i})
+			}
+			continue
+		}
 		for _, m := range r.Pattern.FindAllStringIndex(s, -1) {
 			if m[0] == m[1] {
 				continue // empty match: nothing to redact

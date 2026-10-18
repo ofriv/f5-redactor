@@ -76,7 +76,7 @@ func TestCLISummaryJSON(t *testing.T) {
 
 func TestCLICheckConfig(t *testing.T) {
 	code, stdout, _ := runCLI(t, "", "--rules", rulesFile, "--check-config")
-	if code != exitOK || !strings.Contains(stdout, "OK (7 key rules, 5 value rules)") {
+	if code != exitOK || !strings.Contains(stdout, "OK (7 key rules, 8 value rules)") {
 		t.Errorf("code %d, stdout %q", code, stdout)
 	}
 

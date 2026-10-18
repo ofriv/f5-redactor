@@ -105,7 +105,11 @@ type ValueRule struct {
 	Name      string
 	Pattern   *regexp.Regexp
 	Validator string // "" or ValidatorLuhn
-	Action    Action
+	// Group, if set, redacts only that capture group of each match instead
+	// of the whole match: in "password=hunter2" only "hunter2". This is an
+	// extension of the provided config format.
+	Group  int
+	Action Action
 }
 
 // Load reads and validates the rules file at path.
@@ -180,6 +184,7 @@ type rawValueRule struct {
 	Name      string `yaml:"name"`
 	Pattern   string `yaml:"pattern"`
 	Validator string `yaml:"validator"`
+	Group     int    `yaml:"group"`
 	Action    string `yaml:"action"`
 }
 
@@ -265,7 +270,7 @@ func (raw *rawConfig) validate() (*Config, error) {
 	for i, r := range raw.ValueRules {
 		checkName("value_rules", i, r.Name)
 		label := fmt.Sprintf("value_rules[%d] %q", i, r.Name)
-		rule := ValueRule{Name: r.Name, Validator: r.Validator, Action: Action(r.Action)}
+		rule := ValueRule{Name: r.Name, Validator: r.Validator, Action: Action(r.Action), Group: r.Group}
 
 		if !validAction(rule.Action) {
 			fail("%s: invalid action %q (want mask, partial, hash or remove)", label, r.Action)
@@ -288,6 +293,14 @@ func (raw *rawConfig) validate() (*Config, error) {
 			// be redacted again on every run, which breaks idempotency.
 			if settings.MaskReplacement != "" && re.MatchString(settings.MaskReplacement) {
 				fail("%s: pattern matches the mask replacement %q; output would not be idempotent", label, settings.MaskReplacement)
+			}
+			switch {
+			case r.Group < 0:
+				fail("%s: group must be >= 0", label)
+			case r.Group > re.NumSubexp():
+				fail("%s: group %d does not exist, the pattern has %d", label, r.Group, re.NumSubexp())
+			case r.Group > 0 && r.Validator != "":
+				fail("%s: group cannot be combined with a validator", label)
 			}
 			rule.Pattern = re
 		}

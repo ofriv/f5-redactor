@@ -11,11 +11,15 @@ func TestSecretAssignmentInText(t *testing.T) {
 	tests := []struct {
 		in, want string
 	}{
-		{"login attempt password=hunter2 for user=zed", "login attempt **** for user=zed"},
-		{"retry with token: abc123, then stop", "retry with ****, then stop"},
-		{"PASSWORD = hunter2", "****"},
-		{"cfg api_key=k1;secret=s2", "cfg ****;****"},
-		{`json "password":"x" is not this rule`, `json "password":"x" is not this rule`},
+		// Only the value is masked; the name stays (group: 1).
+		{"login attempt password=hunter2 for user=zed", "login attempt password=**** for user=zed"},
+		{"retry with token: abc123, then stop", "retry with token: ****, then stop"},
+		{"PASSWORD = hunter2", "PASSWORD = ****"},
+		{"cfg api_key=k1;secret=s2", "cfg api_key=****;secret=****"},
+		{"auth token: Bearer abc123", "auth token: Bearer ****"},
+		{"password=****", "password=****"},
+		// JSON syntax in text is the json-secret rule's job.
+		{`json "password":"x" in text`, `json "password":"****" in text`},
 		{"password_hint=first pet", "password_hint=first pet"},
 		{"mypassword=x", "mypassword=x"},
 		{"no secret here", "no secret here"},

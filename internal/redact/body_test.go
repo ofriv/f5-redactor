@@ -53,16 +53,20 @@ func TestRedactBodyStrings(t *testing.T) {
 			counts: Counts{},
 		},
 		{
+			// Not valid JSON, so key rules cannot see "password"; the
+			// json-secret value rule still finds it in the text.
 			name:   "broken JSON string is scanned as text",
 			in:     `{"body":"{\"email\":\"a@b.com\",\"password\":\"x\""}`,
-			want:   `{"body":"{\"email\":\"` + h("a@b.com") + `\",\"password\":\"x\""}`,
-			counts: Counts{"email": 1},
+			want:   `{"body":"{\"email\":\"` + h("a@b.com") + `\",\"password\":\"****\""}`,
+			counts: Counts{"email": 1, "json-secret": 1},
 		},
 		{
+			// Header values are not parsed as JSON; the json-secret value
+			// rule still finds the password in the text.
 			name:   "JSON-looking text in a header is not parsed",
 			in:     `{"headers":{"X-Data":"{\"password\":\"x\"}"}}`,
-			want:   `{"headers":{"X-Data":"{\"password\":\"x\"}"}}`,
-			counts: Counts{},
+			want:   `{"headers":{"X-Data":"{\"password\":\"****\"}"}}`,
+			counts: Counts{"json-secret": 1},
 		},
 		{
 			name:   "form body with Content-Type (line 8)",
@@ -87,7 +91,7 @@ func TestRedactBodyStrings(t *testing.T) {
 			// value rule catches the password.
 			name:   "free text with key=value is not a form (line 41)",
 			in:     `{"body":{"debug":"login attempt password=hunter2 for user=zed"}}`,
-			want:   `{"body":{"debug":"login attempt **** for user=zed"}}`,
+			want:   `{"body":{"debug":"login attempt password=**** for user=zed"}}`,
 			counts: Counts{"secret-assignment": 1},
 		},
 		{
@@ -115,11 +119,12 @@ func TestRedactBodyStrings(t *testing.T) {
 			counts: Counts{"cvv-fields": 1, "email": 1},
 		},
 		{
-			// Found by FuzzRedactLine: masking the password removes the only
-			// space, and the rest then reads as a form with an encoded email.
-			name:   "text that becomes a form after redaction",
+			// Found by FuzzRedactLine. Text (it has a space) with a
+			// password and a percent-encoded email: both are redacted, and
+			// a second run changes nothing.
+			name:   "text with a password and an encoded email",
 			in:     `{"body":"x=0%40b.co&pAsswd= 00000"}`,
-			want:   `{"body":"x=` + h("0@b.co") + `&****"}`,
+			want:   `{"body":"x=` + h("0%40b.co") + `&pAsswd= ****"}`,
 			counts: Counts{"secret-assignment": 1, "email": 1},
 		},
 		{
@@ -167,9 +172,11 @@ func TestEmbeddedJSONDepth(t *testing.T) {
 		}
 	}
 
+	// Deeper than maxEmbedDepth the string is not parsed, so key rules do
+	// not run; the json-secret value rule still finds the password text.
 	got, counts := redactLine(t, e, wrap(maxEmbedDepth+1))
-	if !strings.Contains(got, "hunter2") {
-		t.Errorf("%d levels: expected key rules to stop at maxEmbedDepth", maxEmbedDepth+1)
+	if strings.Contains(got, "hunter2") || counts["secret-fields"] != 0 || counts["json-secret"] != 1 {
+		t.Errorf("%d levels: password must be caught by json-secret: %s %v", maxEmbedDepth+1, got, counts)
 	}
 	if strings.Contains(got, "a@b.com") || counts["email"] != 1 {
 		t.Errorf("%d levels: value rules must still apply: %s", maxEmbedDepth+1, got)

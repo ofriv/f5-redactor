@@ -17,6 +17,9 @@ redactions by rule:
   credit-card            17
   api-key-prefix         2
   secret-assignment      1
+  json-secret            0
+  xml-secret             0
+  multipart-secret       0
 rejected lines by reason:
   invalid_json           3
 notices:

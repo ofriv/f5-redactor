@@ -56,6 +56,9 @@ func TestLoadShippedRules(t *testing.T) {
 		{"credit-card", ValidatorLuhn, ActionPartial},
 		{"api-key-prefix", "", ActionMask},
 		{"secret-assignment", "", ActionMask},
+		{"json-secret", "", ActionMask},
+		{"xml-secret", "", ActionMask},
+		{"multipart-secret", "", ActionMask},
 	}
 	if len(cfg.ValueRules) != len(wantValue) {
 		t.Fatalf("got %d value rules, want %d", len(cfg.ValueRules), len(wantValue))
@@ -210,6 +213,21 @@ version: 1
 value_rules:
   - { name: a, pattern: '\d+', validator: iban, action: mask }
 `, `unknown validator "iban"`},
+		{"group out of range", `
+version: 1
+value_rules:
+  - { name: a, pattern: 'x=(\d+)', group: 2, action: mask }
+`, "group 2 does not exist"},
+		{"negative group", `
+version: 1
+value_rules:
+  - { name: a, pattern: 'x=(\d+)', group: -1, action: mask }
+`, "group must be >= 0"},
+		{"group with validator", `
+version: 1
+value_rules:
+  - { name: a, pattern: 'card=(\d+)', group: 1, validator: luhn, action: mask }
+`, "cannot be combined with a validator"},
 		{"bad value action", `
 version: 1
 value_rules:
