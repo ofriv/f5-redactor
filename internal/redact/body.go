@@ -65,7 +65,22 @@ func (e *Engine) redactBodyStringOnce(s string, w walk, counts Counts) string {
 // text; the query string is redacted like a form, with the body's key rules
 // (a query parameter is a request field just like a form field, so
 // token=abc123 is caught by the secret-fields rule).
+//
+// Like a body string, the path is redacted again until it stops changing: a
+// pair with broken percent-encoding is redacted as text, and the result can
+// decode cleanly on the next run ("?token=0% " becomes "?token=**** ").
 func (e *Engine) redactPath(path string, counts Counts) string {
+	for range maxTextPasses {
+		out := e.redactPathOnce(path, counts)
+		if out == path {
+			return out
+		}
+		path = out
+	}
+	return path
+}
+
+func (e *Engine) redactPathOnce(path string, counts Counts) string {
 	base, query, hasQuery := strings.Cut(path, "?")
 	base = e.RedactText(base, counts)
 	if !hasQuery {

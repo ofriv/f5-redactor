@@ -252,3 +252,21 @@ func TestLooksLikeForm(t *testing.T) {
 		}
 	}
 }
+
+// Found by fuzzing (FuzzRedactLine): paths with broken percent-encoding
+// changed again on a second run.
+func TestPathIsIdempotent(t *testing.T) {
+	e := shippedEngine(t)
+	for _, path := range []string{
+		"?token=0% ",
+		"/x?password=a%zz token: abc def",
+		"?token:?0",
+		"/a?b=%&token=x%2",
+	} {
+		line := `{"path":` + jsonString(path) + `}`
+		once, _ := redactLine(t, e, line)
+		if twice, _ := redactLine(t, e, once); twice != once {
+			t.Errorf("path %q not idempotent:\n once %s\ntwice %s", path, once, twice)
+		}
+	}
+}
