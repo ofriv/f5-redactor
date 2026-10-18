@@ -133,3 +133,25 @@ func TestCLIMissingInputFile(t *testing.T) {
 		t.Errorf("code %d, stderr %q", code, stderr)
 	}
 }
+
+func TestCLIHashKey(t *testing.T) {
+	in := `{"body":{"note":"a@b.com"}}` + "\n"
+
+	t.Setenv(hashKeyEnv, "0123456789abcdef0123456789abcdef")
+	code, stdout, _ := runCLI(t, in, "--rules", rulesFile)
+	if code != exitOK || !strings.Contains(stdout, "hmac-sha256:") {
+		t.Errorf("with a key: code %d, stdout %q", code, stdout)
+	}
+
+	t.Setenv(hashKeyEnv, "too-short")
+	code, stdout, stderr := runCLI(t, in, "--rules", rulesFile)
+	if code != exitUsage || stdout != "" || !strings.Contains(stderr, "at least 32") || strings.Contains(stderr, "too-short") {
+		t.Errorf("short key: code %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+
+	t.Setenv(hashKeyEnv, "")
+	code, stdout, _ = runCLI(t, in, "--rules", rulesFile)
+	if code != exitOK || !strings.Contains(stdout, `"sha256:`) {
+		t.Errorf("without a key: code %d, stdout %q", code, stdout)
+	}
+}

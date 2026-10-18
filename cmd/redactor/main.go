@@ -6,6 +6,10 @@
 // The redacted NDJSON goes to stdout; warnings and the summary go to stderr.
 // With --serve it runs the HTTP service instead (see internal/server).
 //
+// If the environment variable REDACTOR_HASH_KEY is set, the hash action uses
+// HMAC-SHA256 with that key instead of plain SHA-256. The key is a secret, so
+// it comes from the environment (a Kubernetes Secret), never from rules.yaml.
+//
 // Exit codes:
 //
 //	0  the input was processed (rejected lines are reported, not fatal)
@@ -38,6 +42,9 @@ const (
 	exitFailure = 1
 	exitUsage   = 2
 )
+
+// hashKeyEnv names the environment variable that holds the HMAC key.
+const hashKeyEnv = "REDACTOR_HASH_KEY"
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -100,7 +107,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%s: OK (%d key rules, %d value rules)\n", *rulesPath, len(cfg.KeyRules), len(cfg.ValueRules))
 		return exitOK
 	}
-	eng := redact.New(cfg)
+	var engineOpts []redact.Option
+	if key := os.Getenv(hashKeyEnv); key != "" {
+		if err := redact.ValidateHashKey([]byte(key)); err != nil {
+			fmt.Fprintf(stderr, "redactor: %s: %v\n", hashKeyEnv, err)
+			return exitUsage
+		}
+		engineOpts = append(engineOpts, redact.WithHashKey([]byte(key)))
+	}
+	eng := redact.New(cfg, engineOpts...)
 
 	if *serve {
 		logger := slog.New(slog.NewJSONHandler(stderr, nil))
@@ -111,6 +126,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
+		logger.Info("rules loaded", "key_rules", len(cfg.KeyRules), "value_rules", len(cfg.ValueRules), "hashing", eng.HashAlgorithm())
 		srv := server.New(eng, server.Options{MaxLineBytes: *maxLine, MaxConcurrent: *maxConcurrent, Logger: logger})
 		if err := runServer(ctx, ln, srv, logger, *shutdownDelay); err != nil {
 			logger.Error("server failed", "error", err.Error())

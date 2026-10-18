@@ -14,8 +14,9 @@ import (
 // set whose replacements keep creating new matches.
 const maxTextPasses = 8
 
-// hashToken finds values produced by Hash inside a longer text.
-var hashToken = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
+// hashToken finds values produced by Hash (either method) inside a longer
+// text. "hmac-sha256:" contains "sha256:", so one pattern finds both.
+var hashToken = regexp.MustCompile(`(?:hmac-)?sha256:[0-9a-f]{64}`)
 
 // RedactText applies every value rule to s and returns the redacted text.
 // Redactions are added to counts.

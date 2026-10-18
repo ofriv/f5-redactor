@@ -20,8 +20,17 @@ type Engine struct {
 	anchoredFull  []*regexp.Regexp
 }
 
+// Option changes how New builds an Engine.
+type Option func(*Engine)
+
+// WithHashKey makes the hash action use HMAC-SHA256 with key instead of
+// plain SHA-256. Check the key with ValidateHashKey first.
+func WithHashKey(key []byte) Option {
+	return func(e *Engine) { e.actions.hashKey = key }
+}
+
 // New builds an Engine from a validated config.
-func New(cfg *config.Config) *Engine {
+func New(cfg *config.Config, opts ...Option) *Engine {
 	e := &Engine{
 		keyRules:      cfg.KeyRules,
 		valueRules:    cfg.ValueRules,
@@ -36,7 +45,19 @@ func New(cfg *config.Config) *Engine {
 			e.anchoredFull[i] = regexp.MustCompile(`^(?:` + r.Pattern.String() + `)$`)
 		}
 	}
+	for _, opt := range opts {
+		opt(e)
+	}
 	return e
+}
+
+// HashAlgorithm names the method the hash action uses: "sha256" or
+// "hmac-sha256".
+func (e *Engine) HashAlgorithm() string {
+	if len(e.actions.hashKey) > 0 {
+		return "hmac-sha256"
+	}
+	return "sha256"
 }
 
 // RuleNames returns the names of all rules, key rules first, in config order.
