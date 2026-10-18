@@ -115,6 +115,14 @@ func TestRedactBodyStrings(t *testing.T) {
 			counts: Counts{"cvv-fields": 1, "email": 1},
 		},
 		{
+			// Found by FuzzRedactLine: masking the password removes the only
+			// space, and the rest then reads as a form with an encoded email.
+			name:   "text that becomes a form after redaction",
+			in:     `{"body":"x=0%40b.co&pAsswd= 00000"}`,
+			want:   `{"body":"x=` + h("0@b.co") + `&****"}`,
+			counts: Counts{"secret-assignment": 1, "email": 1},
+		},
+		{
 			name:   "email used as an object key",
 			in:     `{"body":{"users":{"alice@example.com":{"role":"admin"}}}}`,
 			want:   `{"body":{"users":{"` + h("alice@example.com") + `":{"role":"admin"}}}}`,

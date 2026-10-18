@@ -26,7 +26,24 @@ const maxEmbedDepth = 3
 //
 // Anything that fails to parse falls through to the next step, so a broken
 // document is still scanned as text.
+//
+// Redacting can change which of these the string looks like: masking
+// "pAsswd= 0000" in "a=0%40b.co&pAsswd= 0000" removes the only space, and
+// the result now has the shape of a form, with an encoded email in it. So,
+// as in RedactText, the string is redacted again until it stops changing;
+// the output is then stable under another run (idempotent).
 func (e *Engine) redactBodyString(s string, w walk, counts Counts) string {
+	for range maxTextPasses {
+		out := e.redactBodyStringOnce(s, w, counts)
+		if out == s {
+			return out
+		}
+		s = out
+	}
+	return s
+}
+
+func (e *Engine) redactBodyStringOnce(s string, w walk, counts Counts) string {
 	if w.embedDepth < maxEmbedDepth && looksLikeJSON(s) {
 		if root, err := parseJSON([]byte(s)); err == nil && (root.kind == kindObject || root.kind == kindArray) {
 			local := Counts{}
