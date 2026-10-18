@@ -73,16 +73,40 @@ approved them as a set, so they share a timestamp.
 
 ## 1. Build, run, test
 
-Requires Go 1.27 (Docker and kind only for deployment).
+Requires Go 1.27. Docker and kind are needed only for the container and
+Kubernetes parts.
+
+**CLI**
 
 ```bash
 go build -o redactor ./cmd/redactor
 ./redactor --rules rules.yaml input.ndjson > redacted.ndjson   # summary on stderr
-./redactor --rules rules.yaml --check-config                    # validate rules only
+cat input.ndjson | ./redactor --rules rules.yaml                # or from stdin
+./redactor --rules rules.yaml --check-config                    # only validate the rules
+```
 
+**Service**
+
+```bash
 ./redactor --serve --addr :8080 --rules rules.yaml
-curl --data-binary @input.ndjson localhost:8080/redact
 
+# in a second terminal:
+curl --data-binary @input.ndjson localhost:8080/redact
+```
+
+**Docker** (the image starts the service with its own copy of `rules.yaml`)
+
+```bash
+docker build -t redactor:0.1.0 .
+docker run --rm -p 8080:8080 redactor:0.1.0
+
+# in a second terminal:
+curl --data-binary @input.ndjson localhost:8080/redact
+```
+
+**Tests**
+
+```bash
 go test ./...            # -short skips the 64 MiB memory test
 go test -race ./...
 go test ./internal/redact -run '^$' -fuzz FuzzRedactLine -fuzztime 60s
@@ -235,7 +259,11 @@ docker build -t redactor:0.1.0 .
 kind create cluster && kind load docker-image redactor:0.1.0
 kubectl apply -k deploy/k8s
 kubectl -n redactor create secret generic redactor-hash-key --from-literal=key="$(openssl rand -hex 32)"
+kubectl -n redactor rollout status deployment/redactor
 kubectl -n redactor port-forward service/redactor 8080:80
+
+# in a second terminal:
+curl --data-binary @input.ndjson localhost:8080/redact
 ```
 
 I tested all of this on a local kind cluster.
