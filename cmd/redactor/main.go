@@ -62,6 +62,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	addr := fs.String("addr", ":8080", "listen address for --serve")
 	maxConcurrent := fs.Int("max-concurrent", server.DefaultMaxConcurrent, "most /redact requests served at once (--serve)")
 	shutdownDelay := fs.Duration("shutdown-delay", 5*time.Second, "time between failing /readyz and closing the listener at shutdown (--serve)")
+	idleTimeout := fs.Duration("idle-timeout", server.DefaultIdleTimeout, "cut off a /redact request with no full line in or out for this long (--serve)")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: redactor [flags] [input-file]")
 		fmt.Fprintln(stderr, "       redactor --serve [--addr :8080] [flags]")
@@ -93,6 +94,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if *maxConcurrent <= 0 {
 		fmt.Fprintln(stderr, "redactor: --max-concurrent must be positive")
+		return exitUsage
+	}
+	if *idleTimeout <= 0 {
+		fmt.Fprintln(stderr, "redactor: --idle-timeout must be positive")
 		return exitUsage
 	}
 
@@ -127,7 +132,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
 		logger.Info("rules loaded", "key_rules", len(cfg.KeyRules), "value_rules", len(cfg.ValueRules), "hashing", eng.HashAlgorithm())
-		srv := server.New(eng, server.Options{MaxLineBytes: *maxLine, MaxConcurrent: *maxConcurrent, Logger: logger})
+		srv := server.New(eng, server.Options{MaxLineBytes: *maxLine, MaxConcurrent: *maxConcurrent, IdleTimeout: *idleTimeout, Logger: logger})
 		if err := runServer(ctx, ln, srv, logger, *shutdownDelay); err != nil {
 			logger.Error("server failed", "error", err.Error())
 			return exitFailure

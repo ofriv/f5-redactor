@@ -248,3 +248,62 @@ func TestLogHasNoInputData(t *testing.T) {
 		}
 	}
 }
+
+// A client that sends part of a line and then stalls is cut off after the
+// idle timeout, and its slot goes to the next client.
+func TestStalledClientIsCutOff(t *testing.T) {
+	_, ts := newTestServer(t, Options{MaxConcurrent: 1, IdleTimeout: 300 * time.Millisecond})
+
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/redact", pr)
+	stalled := make(chan error, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_, err = io.ReadAll(resp.Body) // returns once the server gives up
+			resp.Body.Close()
+		}
+		stalled <- err
+	}()
+	if _, err := io.WriteString(pw, `{"body":{"pass`); err != nil { // half a line, then nothing
+		t.Fatal(err)
+	}
+
+	select {
+	case <-stalled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stalled request was not cut off")
+	}
+
+	// The slot is free again.
+	resp := post(t, ts.URL, `{"body":{"password":"x"}}`+"\n")
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != `{"body":{"password":"****"}}`+"\n" {
+		t.Errorf("after the stalled client: status %d, body %q", resp.StatusCode, body)
+	}
+}
+
+// A steady stream that takes longer than the idle timeout in total is not
+// cut off: the deadline moves with every line.
+func TestSlowSteadyStreamIsNotCutOff(t *testing.T) {
+	_, ts := newTestServer(t, Options{IdleTimeout: 300 * time.Millisecond})
+
+	pr, pw := io.Pipe()
+	go func() {
+		for range 6 { // ~600ms in total, 100ms between lines
+			io.WriteString(pw, `{"body":{"token":"t"}}`+"\n")
+			time.Sleep(100 * time.Millisecond)
+		}
+		pw.Close()
+	}()
+	resp, err := http.Post(ts.URL+"/redact", "application/x-ndjson", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if got := strings.Count(string(body), `{"body":{"token":"****"}}`); got != 6 {
+		t.Errorf("got %d of 6 lines: %q", got, body)
+	}
+}

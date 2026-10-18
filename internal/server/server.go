@@ -27,6 +27,12 @@ import (
 // limit keeps the worst case bounded: 64 x 10 MiB.
 const DefaultMaxConcurrent = 64
 
+// DefaultIdleTimeout is how long a /redact request may go without a full
+// line in or out. Without it, a client that sends a byte and stalls (or
+// stops reading the response) holds a request slot forever, and a few such
+// clients take the whole service down.
+const DefaultIdleTimeout = time.Minute
+
 // summaryTrailer is the HTTP trailer that carries a request's summary. The
 // response body has already been sent by then, so a trailer is the only
 // place to report the counts back to the client.
@@ -36,6 +42,7 @@ const summaryTrailer = "X-Redactor-Summary"
 type Options struct {
 	MaxLineBytes  int
 	MaxConcurrent int
+	IdleTimeout   time.Duration
 	Logger        *slog.Logger
 }
 
@@ -56,6 +63,9 @@ func New(eng *redact.Engine, opts Options) *Server {
 	}
 	if opts.MaxConcurrent <= 0 {
 		opts.MaxConcurrent = DefaultMaxConcurrent
+	}
+	if opts.IdleTimeout <= 0 {
+		opts.IdleTimeout = DefaultIdleTimeout
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
@@ -118,6 +128,20 @@ func (s *Server) handleRedact(w http.ResponseWriter, r *http.Request) {
 	// error here that is safe to ignore.
 	_ = rc.EnableFullDuplex()
 
+	// Every finished line moves the read and write deadlines forward, so a
+	// long, steady stream runs as long as it needs, but a stalled client is
+	// cut off after IdleTimeout and frees its slot.
+	extend := func() {
+		deadline := time.Now().Add(s.opts.IdleTimeout)
+		_ = rc.SetReadDeadline(deadline)
+		_ = rc.SetWriteDeadline(deadline)
+	}
+	extend()
+	defer func() { // no stale deadline for the next request on this connection
+		_ = rc.SetReadDeadline(time.Time{})
+		_ = rc.SetWriteDeadline(time.Time{})
+	}()
+
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Trailer", summaryTrailer)
@@ -133,6 +157,7 @@ func (s *Server) handleRedact(w http.ResponseWriter, r *http.Request) {
 	stats, err := stream.Process(r.Body, out, s.engine, stream.Options{
 		MaxLineBytes: s.opts.MaxLineBytes,
 		Flush:        flush,
+		AfterLine:    func() error { extend(); return nil },
 	})
 	if err == nil {
 		err = flush()

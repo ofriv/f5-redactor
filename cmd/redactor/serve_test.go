@@ -28,6 +28,7 @@ func TestServeFlagErrors(t *testing.T) {
 	for _, args := range [][]string{
 		{"--serve", "--rules", rulesFile, "input.ndjson"},
 		{"--serve", "--rules", rulesFile, "--max-concurrent", "0"},
+		{"--serve", "--rules", rulesFile, "--idle-timeout", "0s"},
 	} {
 		if code, _, _ := runCLI(t, "", args...); code != exitUsage {
 			t.Errorf("args %v: code %d, want %d", args, code, exitUsage)
