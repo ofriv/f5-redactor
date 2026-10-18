@@ -47,7 +47,7 @@ func (e *Engine) redactBodyStringOnce(s string, w walk, counts Counts) string {
 	if w.embedDepth < maxEmbedDepth && looksLikeJSON(s) {
 		if root, err := parseJSON([]byte(s)); err == nil && (root.kind == kindObject || root.kind == kindArray) {
 			local := Counts{}
-			e.redactNode(root, walk{where: config.ScopeBody, embedDepth: w.embedDepth + 1}, local)
+			e.redactNode(root, walk{where: w.where, embedDepth: w.embedDepth + 1}, local)
 			if len(local) == 0 {
 				return s
 			}
@@ -56,7 +56,7 @@ func (e *Engine) redactBodyStringOnce(s string, w walk, counts Counts) string {
 		}
 	}
 	if isFormContentType(w.contentType) || looksLikeForm(s) {
-		return e.redactForm(s, config.ScopeBody, counts)
+		return e.redactForm(s, w.where, counts)
 	}
 	return e.RedactText(s, counts)
 }

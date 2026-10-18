@@ -138,10 +138,32 @@ func TestRedactLine(t *testing.T) {
 			counts: Counts{"email": 1},
 		},
 		{
-			name:   "body-scoped key rules do not apply at the top level",
+			// Outside headers, every JSON field gets the body rules, even at
+			// the top level where the transaction has no such field.
+			name:   "body rules apply to top-level fields",
 			in:     `{"password":"x","api_key":"k"}`,
-			want:   `{"password":"x","api_key":"` + h("k") + `"}`,
-			counts: Counts{"api-key-names": 1},
+			want:   `{"password":"****","api_key":"` + h("k") + `"}`,
+			counts: Counts{"secret-fields": 1, "api-key-names": 1},
+		},
+		{
+			name:   "unexpected top-level field with nested secrets",
+			in:     `{"ts":"t","method":"POST","user":{"password":"Summer2024","cvv":"123","note":"a@b.com"}}`,
+			want:   `{"ts":"t","method":"POST","user":{"password":"****","note":"` + h("a@b.com") + `"}}`,
+			counts: Counts{"secret-fields": 1, "cvv-fields": 1, "email": 1},
+		},
+		{
+			name:   "unexpected field inside the response",
+			in:     `{"response":{"status":200,"session":{"token":"t1"}}}`,
+			want:   `{"response":{"status":200,"session":{"token":"****"}}}`,
+			counts: Counts{"secret-fields": 1},
+		},
+		{
+			// Header rules stay with headers: a JSON field called Cookie is
+			// not an HTTP header.
+			name:   "header rules do not apply to top-level fields",
+			in:     `{"Cookie":"plain value"}`,
+			want:   `{"Cookie":"plain value"}`,
+			counts: Counts{},
 		},
 		{
 			name:   "headers that are not an object are still scanned",
@@ -210,6 +232,25 @@ func TestRedactLineNotAnObject(t *testing.T) {
 		if notice != NoticeNotObject {
 			t.Errorf("RedactLine(%s) notice = %q, want %q", tt.in, notice, NoticeNotObject)
 		}
+	}
+}
+
+// A line that is not an object has no known structure, so every key rule
+// applies, header rules included.
+func TestRedactLineNotAnObjectUsesAllRules(t *testing.T) {
+	e := shippedEngine(t)
+	in := `[{"Authorization":"Bearer abc123","password":"x"},"{\"Cookie\":\"s=1\"}"]`
+	want := `[{"Authorization":"Bearer ****","password":"****"},"{\"Cookie\":\"****\"}"]`
+	counts := Counts{}
+	out, notice, err := e.RedactLine([]byte(in), counts)
+	if err != nil || notice != NoticeNotObject {
+		t.Fatalf("err %v, notice %q", err, notice)
+	}
+	if string(out) != want {
+		t.Errorf("got  %s\nwant %s", out, want)
+	}
+	if !maps.Equal(counts, Counts{"auth-headers": 2, "secret-fields": 1}) {
+		t.Errorf("counts = %v", counts)
 	}
 }
 

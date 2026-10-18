@@ -8,13 +8,26 @@ import (
 )
 
 // NoticeNotObject is reported for a line that is valid JSON but not an
-// object (e.g. `42` or `["a@b.com"]`). The line is still redacted, treating
-// the whole value as a body, so no data is lost and none leaks.
+// object (e.g. `42` or `["a@b.com"]`). The line is still redacted, with every
+// key rule, so no data is lost and none leaks.
 const NoticeNotObject = "not_an_object"
 
-// scopeTop is the top level of a transaction (ts, method, path, ...): only
-// key rules with scope "any" apply there, plus all value rules.
-const scopeTop config.Scope = "top"
+// Scopes used inside the engine, next to config.ScopeHeaders and
+// config.ScopeBody.
+//
+// The scope of a key rule tells apart two kinds of names: HTTP header names
+// ("headers") and JSON field names ("body"). So any JSON field outside
+// headers is treated as body: a password inside an unexpected top-level
+// field ({"user":{"password":...}}) is still a JSON field named password.
+const (
+	// scopeTop is the top level of a transaction (or of its response),
+	// where headers, body, response and path have their own handling.
+	// Every other field there is redacted as body.
+	scopeTop config.Scope = "top"
+	// scopeUnknown is a value whose structure we do not know (a line that
+	// is not an object): every key rule applies, whatever its scope.
+	scopeUnknown config.Scope = "unknown"
+)
 
 // integerLiteral matches JSON numbers that could be an ID or a card number.
 var integerLiteral = regexp.MustCompile(`^-?[0-9]+$`)
@@ -34,7 +47,7 @@ func (e *Engine) RedactLine(line []byte, counts Counts) (out []byte, notice stri
 	if root.kind == kindObject {
 		e.redactObject(root, walk{where: scopeTop}, counts)
 	} else {
-		e.redactNode(root, walk{where: config.ScopeBody}, counts)
+		e.redactNode(root, walk{where: scopeUnknown}, counts)
 		notice = NoticeNotObject
 	}
 	return appendJSON(make([]byte, 0, len(line)), root), notice, nil
@@ -42,8 +55,8 @@ func (e *Engine) RedactLine(line []byte, counts Counts) (out []byte, notice stri
 
 // walk is the context of the value being redacted.
 type walk struct {
-	// where is the part of the transaction (top, headers or body), which
-	// decides the key rules that apply.
+	// where is the part of the transaction (top, headers, body or
+	// unknown), which decides the key rules that apply.
 	where config.Scope
 	// embedDepth counts how many JSON-inside-a-string levels we are in.
 	embedDepth int
@@ -87,10 +100,14 @@ func (e *Engine) redactObject(obj *node, w walk, counts Counts) {
 			}
 		}
 
-		rule := e.keyRuleFor(m.key, w.where)
+		field := inner
+		if w.where == scopeTop {
+			field.where = config.ScopeBody // any other top-level field
+		}
+		rule := e.keyRuleFor(m.key, field.where)
 		switch {
 		case rule == nil:
-			e.redactNode(m.value, inner, counts)
+			e.redactNode(m.value, field, counts)
 		case rule.Action == config.ActionRemove:
 			counts.add(rule.Name)
 			continue // drop the key and its value
@@ -106,11 +123,12 @@ func (e *Engine) redactObject(obj *node, w walk, counts Counts) {
 }
 
 // keyRuleFor returns the first key rule that covers key in this scope, or nil.
-// Rules are tried in the order they appear in rules.yaml.
+// Rules are tried in the order they appear in rules.yaml. In scopeUnknown
+// every rule applies.
 func (e *Engine) keyRuleFor(key string, where config.Scope) *config.KeyRule {
 	for i := range e.keyRules {
 		r := &e.keyRules[i]
-		if r.AppliesTo(where) && r.Matches(key) {
+		if (where == scopeUnknown || r.AppliesTo(where)) && r.Matches(key) {
 			return r
 		}
 	}
@@ -123,7 +141,7 @@ func (e *Engine) keyRuleFor(key string, where config.Scope) *config.KeyRule {
 func (e *Engine) redactNode(n *node, w walk, counts Counts) {
 	switch n.kind {
 	case kindString:
-		if w.where == config.ScopeBody {
+		if w.where == config.ScopeBody || w.where == scopeUnknown {
 			n.text = e.redactBodyString(n.text, w, counts)
 		} else {
 			n.text = e.RedactText(n.text, counts)
