@@ -3,6 +3,7 @@ package redact
 import (
 	"maps"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -315,5 +316,52 @@ func TestNilCountsIsAllowed(t *testing.T) {
 	e := shippedEngine(t)
 	if got := e.RedactText("x a@b.com", nil); got != "x "+Hash("a@b.com") {
 		t.Errorf("got %q", got)
+	}
+}
+
+// A hash from an earlier run is exempt, but only the hash: text next to it,
+// even with no separator, is still redacted.
+func TestHashNextToSecretsIsNotAnExemption(t *testing.T) {
+	e := shippedEngine(t)
+	fake := "sha256:" + strings.Repeat("a", 64)
+	tests := []struct{ name, in string }{
+		{"email after a dot", "x " + fake + ".victim@example.com"},
+		{"email right after", "x " + fake + "bob@example.com"},
+		{"hmac prefix", "x hmac-" + fake + ".victim@example.com"},
+		{"password in url", "https://user:" + fake + "SECRET@host/x"},
+	}
+	for _, tt := range tests {
+		got := e.RedactText(tt.in, nil)
+		for _, secret := range []string{"victim@", "bob@", "SECRET", "4111111111111111"} {
+			if strings.Contains(tt.in, secret) && strings.Contains(got, secret) {
+				t.Errorf("%s: %q leaked: %q", tt.name, secret, got)
+			}
+		}
+		if !strings.Contains(got, fake) {
+			t.Errorf("%s: the hash itself was changed: %q", tt.name, got)
+		}
+		if again := e.RedactText(got, nil); again != got {
+			t.Errorf("%s: not idempotent: %q", tt.name, again)
+		}
+	}
+}
+
+func TestClipHashMatches(t *testing.T) {
+	hashes := [][]int{{10, 20}, {30, 40}}
+	tests := []struct {
+		in   match
+		want []match
+	}{
+		{match{0, 5, 0}, []match{{0, 5, 0}}},                             // before
+		{match{12, 18, 0}, nil},                                          // inside
+		{match{5, 15, 0}, []match{{5, 10, 0}}},                           // overlaps the start
+		{match{15, 25, 0}, []match{{20, 25, 0}}},                         // overlaps the end
+		{match{5, 45, 0}, []match{{5, 10, 0}, {20, 30, 0}, {40, 45, 0}}}, // spans both
+	}
+	for _, tt := range tests {
+		got := clipHashMatches([]match{tt.in}, hashes)
+		if !slices.Equal(got, tt.want) {
+			t.Errorf("clip %v = %v, want %v", tt.in, got, tt.want)
+		}
 	}
 }

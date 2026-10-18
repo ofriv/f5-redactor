@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 
 	"f5-redactor/internal/config"
@@ -103,8 +104,8 @@ func (e *Engine) redactTextOnce(s string, counts Counts) (string, bool) {
 	return b.String(), changed
 }
 
-// findMatches returns all validated matches of all value rules in s, except
-// matches that touch a hash produced by an earlier run.
+// findMatches returns all validated matches of all value rules in s, minus
+// any part that lies inside a hash produced by an earlier run.
 func (e *Engine) findMatches(s string) []match {
 	var matches []match
 	for i := range e.valueRules {
@@ -146,7 +147,7 @@ func (e *Engine) findMatches(s string) []match {
 	}
 
 	if len(matches) > 0 && strings.Contains(s, hashPrefix) {
-		matches = e.dropHashMatches(matches, s)
+		matches = clipHashMatches(matches, hashToken.FindAllStringIndex(s, -1))
 	}
 	return matches
 }
@@ -170,14 +171,7 @@ func expandDigitRuns(s string, found []match) []match {
 	if strings.Contains(s, hashPrefix) {
 		hashes = hashToken.FindAllStringIndex(s, -1)
 	}
-	inHash := func(i int) bool {
-		for _, h := range hashes {
-			if h[0] <= i && i < h[1] {
-				return true
-			}
-		}
-		return false
-	}
+	inHash := func(i int) bool { return inSpans(hashes, i) }
 	isDigit := func(i int) bool { return i >= 0 && i < len(s) && s[i] >= '0' && s[i] <= '9' && !inHash(i) }
 	isSep := func(i int) bool { return i >= 0 && i < len(s) && (s[i] == ' ' || s[i] == '-') }
 
@@ -254,17 +248,38 @@ func isWordByte(c byte) bool {
 	return c == '_' || '0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
 }
 
-// dropHashMatches removes matches that touch a hash produced by an earlier
-// run. Leaving those alone guarantees that a hash is never redacted again,
-// whatever the rules are.
-func (e *Engine) dropHashMatches(matches []match, s string) []match {
-	hashes := hashToken.FindAllStringIndex(s, -1)
-	return slices.DeleteFunc(matches, func(m match) bool {
-		for _, h := range hashes {
-			if m.start < h[1] && h[0] < m.end {
-				return true
+// clipHashMatches removes from each match the parts that lie inside a hash
+// from an earlier run (spans: sorted, non-overlapping, from hashToken).
+//
+// The hash itself must never be redacted again, or the output would change
+// on every run. But only the hash is exempt: dropping a whole match that
+// touches one would let input switch redaction off for its neighbours
+// ("sha256:<64 hex>.victim@example.com" would keep the email). So a match is
+// cut to the parts outside the hashes, and those are redacted.
+func clipHashMatches(matches []match, hashes [][]int) []match {
+	if len(hashes) == 0 {
+		return matches
+	}
+	out := make([]match, 0, len(matches))
+	for _, m := range matches {
+		// The first hash that ends after the match starts.
+		i := sort.Search(len(hashes), func(i int) bool { return hashes[i][1] > m.start })
+		start := m.start
+		for ; i < len(hashes) && hashes[i][0] < m.end; i++ {
+			if hashes[i][0] > start {
+				out = append(out, match{start: start, end: hashes[i][0], rule: m.rule})
 			}
+			start = max(start, hashes[i][1])
 		}
-		return false
-	})
+		if start < m.end {
+			out = append(out, match{start: start, end: m.end, rule: m.rule})
+		}
+	}
+	return out
+}
+
+// inSpans reports whether position i lies inside one of the sorted spans.
+func inSpans(spans [][]int, i int) bool {
+	j := sort.Search(len(spans), func(j int) bool { return spans[j][1] > i })
+	return j < len(spans) && spans[j][0] <= i
 }
