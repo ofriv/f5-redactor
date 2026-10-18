@@ -29,6 +29,14 @@ func (c Counts) add(rule string) {
 	}
 }
 
+func (c Counts) merge(other Counts) {
+	if c != nil {
+		for rule, n := range other {
+			c[rule] += n
+		}
+	}
+}
+
 // validators maps a validator name from rules.yaml to its check.
 var validators = map[string]func(string) bool{
 	config.ValidatorLuhn: Luhn,

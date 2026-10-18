@@ -32,49 +32,74 @@ func (e *Engine) RedactLine(line []byte, counts Counts) (out []byte, notice stri
 		return nil, "", err
 	}
 	if root.kind == kindObject {
-		e.redactObject(root, scopeTop, counts)
+		e.redactObject(root, walk{where: scopeTop}, counts)
 	} else {
-		e.redactNode(root, config.ScopeBody, counts)
+		e.redactNode(root, walk{where: config.ScopeBody}, counts)
 		notice = NoticeNotObject
 	}
 	return appendJSON(make([]byte, 0, len(line)), root), notice, nil
 }
 
-// redactObject redacts every member of an object. where says which part of
-// the transaction the object belongs to, which decides the key rules that
-// apply.
-func (e *Engine) redactObject(obj *node, where config.Scope, counts Counts) {
+// walk is the context of the value being redacted.
+type walk struct {
+	// where is the part of the transaction (top, headers or body), which
+	// decides the key rules that apply.
+	where config.Scope
+	// embedDepth counts how many JSON-inside-a-string levels we are in.
+	embedDepth int
+	// contentType is set only for the body value itself, from the matching
+	// headers. It helps recognise a form body.
+	contentType string
+}
+
+// redactObject redacts every member of an object.
+func (e *Engine) redactObject(obj *node, w walk, counts Counts) {
+	inner := walk{where: w.where, embedDepth: w.embedDepth}
+
+	var contentType string
+	if w.where == scopeTop {
+		contentType = contentTypeOf(obj)
+	}
+
 	kept := obj.members[:0]
 	for _, m := range obj.members {
-		if where == scopeTop {
+		if w.where == scopeTop {
 			// The transaction's structure: headers and body switch scope,
-			// and the response holds its own headers and body.
+			// the response holds its own headers and body, and the path may
+			// carry a query string.
 			switch {
 			case m.key == "headers":
-				e.redactNode(m.value, config.ScopeHeaders, counts)
+				e.redactNode(m.value, walk{where: config.ScopeHeaders, embedDepth: w.embedDepth}, counts)
 				kept = append(kept, m)
 				continue
 			case m.key == "body":
-				e.redactNode(m.value, config.ScopeBody, counts)
+				e.redactNode(m.value, walk{where: config.ScopeBody, embedDepth: w.embedDepth, contentType: contentType}, counts)
 				kept = append(kept, m)
 				continue
 			case m.key == "response" && m.value.kind == kindObject:
-				e.redactObject(m.value, scopeTop, counts)
+				e.redactObject(m.value, inner, counts)
+				kept = append(kept, m)
+				continue
+			case m.key == "path" && m.value.kind == kindString:
+				m.value.text = e.redactPath(m.value.text, counts)
 				kept = append(kept, m)
 				continue
 			}
 		}
 
-		rule := e.keyRuleFor(m.key, where)
+		rule := e.keyRuleFor(m.key, w.where)
 		switch {
 		case rule == nil:
-			e.redactNode(m.value, where, counts)
+			e.redactNode(m.value, inner, counts)
 		case rule.Action == config.ActionRemove:
 			counts.add(rule.Name)
 			continue // drop the key and its value
 		default:
 			e.redactWithKeyRule(rule, m.value, counts)
 		}
+		// Value rules also apply to key names: objects keyed by email
+		// address ({"alice@example.com": {...}}) are common.
+		m.key = e.RedactText(m.key, counts)
 		kept = append(kept, m)
 	}
 	obj.members = kept
@@ -93,10 +118,16 @@ func (e *Engine) keyRuleFor(key string, where config.Scope) *config.KeyRule {
 }
 
 // redactNode applies the value rules to every string (and integer) inside n.
-func (e *Engine) redactNode(n *node, where config.Scope, counts Counts) {
+// Strings in a body may hold a whole document of their own (JSON or a form),
+// see redactBodyString.
+func (e *Engine) redactNode(n *node, w walk, counts Counts) {
 	switch n.kind {
 	case kindString:
-		n.text = e.RedactText(n.text, counts)
+		if w.where == config.ScopeBody {
+			n.text = e.redactBodyString(n.text, w, counts)
+		} else {
+			n.text = e.RedactText(n.text, counts)
+		}
 	case kindNumber:
 		// A card number can arrive as a JSON number ("ref": 4111111111111111).
 		// If a value rule changes it, the result is written as a string.
@@ -106,11 +137,12 @@ func (e *Engine) redactNode(n *node, where config.Scope, counts Counts) {
 			}
 		}
 	case kindArray:
+		inner := walk{where: w.where, embedDepth: w.embedDepth}
 		for _, item := range n.items {
-			e.redactNode(item, where, counts)
+			e.redactNode(item, inner, counts)
 		}
 	case kindObject:
-		e.redactObject(n, where, counts)
+		e.redactObject(n, w, counts)
 	}
 }
 
