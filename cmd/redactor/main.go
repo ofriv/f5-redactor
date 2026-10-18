@@ -131,6 +131,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
+		// After the first signal Go's default handling is back, so a second
+		// Ctrl-C stops the process at once instead of waiting for the
+		// graceful shutdown.
+		context.AfterFunc(ctx, stop)
 		logger.Info("rules loaded", "key_rules", len(cfg.KeyRules), "value_rules", len(cfg.ValueRules), "hashing", eng.HashAlgorithm())
 		srv := server.New(eng, server.Options{MaxLineBytes: *maxLine, MaxConcurrent: *maxConcurrent, IdleTimeout: *idleTimeout, Logger: logger})
 		if err := runServer(ctx, ln, srv, logger, *shutdownDelay); err != nil {
