@@ -11,8 +11,9 @@ import (
 
 // maxDepth limits how deeply objects and arrays may nest. Real API payloads
 // stay far below it (the deepest sample line has 12 levels); a line that
-// goes deeper is rejected instead of risking unbounded recursion.
-const maxDepth = 100
+// goes deeper is rejected instead of risking unbounded recursion. Go stacks
+// grow as needed, so 1000 levels of recursion are cheap.
+const maxDepth = 1000
 
 // maxValues limits how many JSON values (strings, numbers, objects, ...) one
 // line may hold. Each value becomes a tree node of about 100 bytes, so a
