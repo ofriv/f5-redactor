@@ -3,7 +3,9 @@ package stream
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -292,5 +294,55 @@ func TestProcessFlushesWhenInputIsIdle(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("a Flush error must stop processing")
+	}
+}
+
+// Parallel redaction must give exactly what one worker gives: the same
+// output in the same order, the same warnings and the same summary. The
+// input spans several batches and mixes in empty, invalid and too-long
+// lines, so line numbers in error records are checked across batches.
+func TestProcessWorkersKeepOrder(t *testing.T) {
+	size := 3 * batchBytes
+	if raceEnabled {
+		size = batchBytes + batchBytes/4 // still more than one batch
+	}
+	var in bytes.Buffer
+	sample := sampleInput(t)
+	// Lines of 300 KB fill a batch after a few, so a line is carried over
+	// to the next batch; one line is over the limit.
+	big := `{"body":"` + strings.Repeat("text ", 300<<10/5) + `a@b.co"}`
+	if raceEnabled {
+		big = `{"body":"a@b.co"}` // the race detector is about 20x slower
+	}
+	for i := 0; in.Len() < size; i++ {
+		in.Write(sample)
+		fmt.Fprintf(&in, "\n{\"n\":%d}\nnot json %d\n%s\n", i, i, big)
+	}
+	fmt.Fprintf(&in, "%s\n{}\n", strings.Repeat("x", 2<<20))
+	run := func(workers int) (string, string, *Stats) {
+		var out, warnings bytes.Buffer
+		stats, err := Process(bytes.NewReader(in.Bytes()), &out, testEngine(t), Options{
+			MaxLineBytes: 1 << 20, Workers: workers, Warnings: &warnings,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.String(), warnings.String(), stats
+	}
+	wantOut, wantWarn, wantStats := run(1)
+	for _, workers := range []int{2, 8} {
+		out, warn, stats := run(workers)
+		if out != wantOut {
+			t.Errorf("workers=%d: output differs from one worker", workers)
+		}
+		if warn != wantWarn {
+			t.Errorf("workers=%d: warnings differ from one worker", workers)
+		}
+		if !reflect.DeepEqual(stats, wantStats) {
+			t.Errorf("workers=%d: stats = %+v, want %+v", workers, stats, wantStats)
+		}
+	}
+	if wantStats.Rejected[ErrLineTooLong.Error()] == 0 || wantStats.Rejected["invalid_json"] == 0 {
+		t.Fatalf("input should have rejected lines: %+v", wantStats.Rejected)
 	}
 }

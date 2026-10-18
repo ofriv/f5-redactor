@@ -41,6 +41,7 @@ const summaryTrailer = "X-Redactor-Summary"
 // Options configures the server.
 type Options struct {
 	MaxLineBytes  int
+	Workers       int // lines of one request redacted in parallel
 	MaxConcurrent int
 	IdleTimeout   time.Duration
 	Logger        *slog.Logger
@@ -160,6 +161,7 @@ func (s *Server) handleRedact(w http.ResponseWriter, r *http.Request) {
 	}
 	stats, err := stream.Process(r.Body, out, s.engine, stream.Options{
 		MaxLineBytes: s.opts.MaxLineBytes,
+		Workers:      s.opts.Workers,
 		Flush:        flush,
 		AfterLine:    func() error { extend(); return nil },
 	})

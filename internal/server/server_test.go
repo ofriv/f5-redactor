@@ -27,6 +27,9 @@ func newTestServer(t *testing.T, opts Options) (*Server, *httptest.Server) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if opts.Workers == 0 {
+		opts.Workers = 4 // as in production, lines are redacted in parallel
+	}
 	s := New(redact.New(cfg), opts)
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)

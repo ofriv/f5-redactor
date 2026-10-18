@@ -1,7 +1,7 @@
 package stream
 
 import (
-	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"runtime"
@@ -62,6 +62,7 @@ func TestMemoryStaysFlat(t *testing.T) {
 	var ms runtime.MemStats
 	in := &repeatReader{data: sampleInput(t), limit: inputSize}
 	_, err := Process(in, io.Discard, testEngine(t), Options{
+		Workers: runtime.GOMAXPROCS(0),
 		AfterLine: func() error {
 			lines++
 			if lines%20_000 == 0 {
@@ -80,16 +81,22 @@ func TestMemoryStaysFlat(t *testing.T) {
 	}
 }
 
-// BenchmarkProcess measures throughput on the sample input (reported as
-// MB/s by -bench).
+// BenchmarkProcess measures throughput on the sample input repeated to
+// 4 MiB (reported as MB/s by -bench), with one worker and with one per CPU.
 func BenchmarkProcess(b *testing.B) {
 	data := sampleInput(b)
 	eng := testEngine(b)
-	b.SetBytes(int64(len(data)))
-	b.ReportAllocs()
-	for b.Loop() {
-		if _, err := Process(bytes.NewReader(data), io.Discard, eng, Options{}); err != nil {
-			b.Fatal(err)
-		}
+	const size = 4 << 20
+	for _, workers := range []int{1, runtime.GOMAXPROCS(0)} {
+		b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
+			b.SetBytes(size)
+			b.ReportAllocs()
+			for b.Loop() {
+				in := &repeatReader{data: data, limit: size}
+				if _, err := Process(in, io.Discard, eng, Options{Workers: workers}); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

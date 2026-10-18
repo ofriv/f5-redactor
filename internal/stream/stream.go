@@ -1,10 +1,9 @@
 // Package stream runs the redaction engine over an NDJSON stream, one line
 // at a time. It is shared by the CLI and the HTTP service.
 //
-// Memory use is bounded by the longest accepted line (MaxLineBytes), not by
-// the size of the input: one line is read, redacted, written and dropped
-// before the next one is read. Time is linear in the input size times the
-// number of rules.
+// Memory use is bounded by the longest accepted line (MaxLineBytes) plus one
+// batch of lines (batchBytes), not by the size of the input. Time is linear
+// in the input size times the number of rules.
 package stream
 
 import (
@@ -13,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
+	"sync/atomic"
 
 	"f5-redactor/internal/redact"
 )
@@ -21,6 +22,12 @@ import (
 // for any reasonable API transaction, small enough that a few concurrent
 // streams cannot exhaust a pod's memory.
 const DefaultMaxLineBytes = 10 << 20 // 10 MiB
+
+// batchBytes caps the input held in one batch of lines that are redacted in
+// parallel (a single longer line makes a batch of its own). A batch also
+// ends when no complete line is waiting in the input, so a client sending
+// one line at a time gets each line back at once.
+const batchBytes = 1 << 20 // 1 MiB
 
 // ErrLineTooLong is the rejection reason for a line over MaxLineBytes.
 var ErrLineTooLong = errors.New("line_too_long")
@@ -36,6 +43,9 @@ type Options struct {
 	// MaxWarnings caps the number of warning messages, so a broken input
 	// cannot flood the log. The summary still counts every line.
 	MaxWarnings int
+	// Workers is how many lines are redacted in parallel (at least 1). The
+	// output keeps the input order.
+	Workers int
 	// AfterLine, if set, is called after each output line is written.
 	AfterLine func() error
 	// Flush, if set, is called after writing a line when no complete input
@@ -84,60 +94,149 @@ func Process(r io.Reader, w io.Writer, eng *redact.Engine, opts Options) (*Stats
 		warnings++
 	}
 
-	var out []byte
-	for lineNo := 1; ; lineNo++ {
-		line, tooLong, err := lr.next()
-		if errors.Is(err, io.EOF) {
+	var (
+		batch      []job
+		lineNo     int
+		pending    job // a line read but left for the next batch
+		hasPending bool
+	)
+	for {
+		// Take the lines that are already waiting, up to batchBytes in all
+		// (or one longer line). Only the first read may block.
+		batch = batch[:0]
+		size := 0
+		for {
+			var j job
+			if hasPending {
+				j, hasPending = pending, false
+			} else {
+				line, tooLong, err := lr.next()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					return stats, fmt.Errorf("read input: %w", err)
+				}
+				lineNo++
+				stats.LinesRead++
+				// next reuses its buffer, so the batch keeps its own copy.
+				j = job{lineNo: lineNo, line: bytes.Clone(line), tooLong: tooLong}
+			}
+			if len(batch) > 0 && size+len(j.line) > batchBytes {
+				pending, hasPending = j, true
+				break
+			}
+			batch = append(batch, j)
+			size += len(j.line)
+			if !lr.hasBufferedLine() {
+				break
+			}
+		}
+		if len(batch) == 0 {
 			return stats, nil
 		}
-		if err != nil {
-			return stats, fmt.Errorf("read input: %w", err)
-		}
-		stats.LinesRead++
 
-		out = out[:0]
-		switch {
-		case tooLong:
-			stats.reject(ErrLineTooLong)
-			warn(lineNo, ErrLineTooLong.Error())
-			out = errorRecord(out, ErrLineTooLong, lineNo)
-		default:
-			redacted, notice, err := eng.RedactLine(line, stats.Redactions)
+		redactBatch(eng, batch, opts.Workers, stats.Redactions)
+
+		// Write in input order.
+		for i := range batch {
+			j := &batch[i]
 			switch {
-			case errors.Is(err, redact.ErrEmpty):
+			case j.tooLong:
+				stats.reject(ErrLineTooLong)
+				warn(j.lineNo, ErrLineTooLong.Error())
+			case errors.Is(j.err, redact.ErrEmpty):
 				// Nothing to hide: written back as it came, so output line N
 				// is always input line N.
 				stats.Empty++
-				out = append(out, line...)
-			case err != nil:
-				stats.reject(err)
-				warn(lineNo, err.Error())
-				out = errorRecord(out, err, lineNo)
-			default:
-				if notice != "" {
-					stats.Notices[notice]++
-					warn(lineNo, notice+" (redacted)")
-				}
-				out = append(out, redacted...)
+			case j.err != nil:
+				stats.reject(j.err)
+				warn(j.lineNo, j.err.Error())
+			case j.notice != "":
+				stats.Notices[j.notice]++
+				warn(j.lineNo, j.notice+" (redacted)")
 			}
-		}
-
-		out = append(out, '\n')
-		if _, err := w.Write(out); err != nil {
-			return stats, fmt.Errorf("write output: %w", err)
-		}
-		stats.LinesWritten++
-		if opts.AfterLine != nil {
-			if err := opts.AfterLine(); err != nil {
+			if _, err := w.Write(j.out); err != nil {
 				return stats, fmt.Errorf("write output: %w", err)
 			}
+			stats.LinesWritten++
+			if opts.AfterLine != nil {
+				if err := opts.AfterLine(); err != nil {
+					return stats, fmt.Errorf("write output: %w", err)
+				}
+			}
 		}
-		if opts.Flush != nil && !lr.hasBufferedLine() {
+		if opts.Flush != nil && !hasPending && !lr.hasBufferedLine() {
 			if err := opts.Flush(); err != nil {
 				return stats, fmt.Errorf("write output: %w", err)
 			}
 		}
 	}
+}
+
+// job is one input line and, once redacted, its output line.
+type job struct {
+	lineNo  int
+	line    []byte
+	tooLong bool
+
+	out    []byte // the line to write, with its "\n"
+	err    error  // why the line was rejected, or redact.ErrEmpty
+	notice string
+}
+
+// redactBatch redacts every line of batch, with up to workers goroutines.
+// Each goroutine counts into its own map; the counts are added to counts at
+// the end.
+func redactBatch(eng *redact.Engine, batch []job, workers int, counts redact.Counts) {
+	workers = max(1, min(workers, len(batch)))
+	if workers == 1 {
+		for i := range batch {
+			redactJob(eng, &batch[i], counts)
+		}
+		return
+	}
+	var (
+		next atomic.Int64
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+	)
+	for range workers {
+		wg.Go(func() {
+			own := redact.Counts{}
+			for {
+				i := int(next.Add(1)) - 1
+				if i >= len(batch) {
+					break
+				}
+				redactJob(eng, &batch[i], own)
+			}
+			mu.Lock()
+			for name, n := range own {
+				counts[name] += n
+			}
+			mu.Unlock()
+		})
+	}
+	wg.Wait()
+}
+
+func redactJob(eng *redact.Engine, j *job, counts redact.Counts) {
+	if j.tooLong {
+		j.out = errorRecord(nil, ErrLineTooLong, j.lineNo)
+	} else {
+		redacted, notice, err := eng.RedactLine(j.line, counts)
+		switch {
+		case errors.Is(err, redact.ErrEmpty):
+			j.out, j.err = j.line, err
+		case err != nil:
+			j.out, j.err = errorRecord(nil, err, j.lineNo), err
+		default:
+			j.out, j.notice = redacted, notice
+		}
+	}
+	j.out = append(j.out, '\n')
+	j.line = nil
 }
 
 // errorRecord appends the replacement written for a line that could not be

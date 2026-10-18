@@ -28,6 +28,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -56,6 +57,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	rulesPath := fs.String("rules", "rules.yaml", "path to the rules file")
 	maxLine := fs.Int("max-line-bytes", stream.DefaultMaxLineBytes, "longest accepted input line, in bytes")
+	workers := fs.Int("workers", runtime.GOMAXPROCS(0), "lines redacted in parallel; the output keeps the input order")
 	summaryFormat := fs.String("summary-format", "text", "summary format on stderr: text or json")
 	checkConfig := fs.Bool("check-config", false, "validate the rules file and exit")
 	serve := fs.Bool("serve", false, "run the HTTP service instead of processing a file")
@@ -90,6 +92,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if *serve && fs.NArg() > 0 {
 		fmt.Fprintln(stderr, "redactor: --serve does not take an input file")
+		return exitUsage
+	}
+	if *workers <= 0 {
+		fmt.Fprintln(stderr, "redactor: --workers must be positive")
 		return exitUsage
 	}
 	if *maxConcurrent <= 0 {
@@ -136,7 +142,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		// graceful shutdown.
 		context.AfterFunc(ctx, stop)
 		logger.Info("rules loaded", "key_rules", len(cfg.KeyRules), "value_rules", len(cfg.ValueRules), "hashing", eng.HashAlgorithm())
-		srv := server.New(eng, server.Options{MaxLineBytes: *maxLine, MaxConcurrent: *maxConcurrent, IdleTimeout: *idleTimeout, Logger: logger})
+		srv := server.New(eng, server.Options{MaxLineBytes: *maxLine, Workers: *workers, MaxConcurrent: *maxConcurrent, IdleTimeout: *idleTimeout, Logger: logger})
 		if err := runServer(ctx, ln, srv, logger, *shutdownDelay); err != nil {
 			logger.Error("server failed", "error", err.Error())
 			return exitFailure
@@ -158,6 +164,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	out := bufio.NewWriterSize(stdout, 64<<10)
 	stats, err := stream.Process(in, out, eng, stream.Options{
 		MaxLineBytes: *maxLine,
+		Workers:      *workers,
 		Warnings:     stderr,
 		MaxWarnings:  20,
 		// Flush whenever the input has no full line waiting, so piping a
