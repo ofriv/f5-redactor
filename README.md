@@ -101,109 +101,132 @@ go test ./internal/redact -run '^$' -fuzz FuzzRedactLine -fuzztime 60s
 Exit codes: `0` done (rejected lines are reported, not fatal), `1` I/O
 error, `2` bad usage or rules that do not load.
 
-**Service endpoints.** `POST /redact` streams NDJSON both ways; its summary
-comes in the `X-Redactor-Summary` trailer and the log. `GET /healthz` is
-liveness, `GET /readyz` turns `503` once shutdown starts, `GET /metrics`
-has Prometheus counters (requests, lines, rejections by reason, redactions
-by rule; never input data). `kill -HUP` reloads `rules.yaml`: rules that do
-not load are logged and the current ones stay, and a running request keeps
-the rules it started with.
+**The service.** `POST /redact` takes NDJSON and streams the redacted lines
+back while it is still reading. A summary of each request goes into the
+`X-Redactor-Summary` trailer and the log. `GET /healthz` and `GET /readyz`
+are for Kubernetes (readiness turns `503` once shutdown starts), and
+`GET /metrics` has Prometheus counters: requests, lines, rejected lines by
+reason and redactions by rule, never input data. `kill -HUP` reloads
+`rules.yaml` without a restart. If the new file is broken, I keep the old
+rules and log the error, and a request that is already running finishes
+with the rules it started with.
 
-**Tests that matter most:** `TestNoSecretLeaks` (all 68 secrets in the
-sample are absent from stdout and stderr), `TestGeneratedLeakCorpus` (58
-spellings of secret names × every place a secret can sit × every value
-shape; its first run found 6 kinds of leaks), `TestExpectedOutput` (golden
-output I reviewed line by line), `TestRedactStreamsLineByLine` (a buffering
-server would deadlock), `TestMemoryStaysFlat`, `TestProcessWorkersKeepOrder`
-(1, 2 and 8 workers give byte-identical output), and
-`TestManyConcurrentClients` (60 clients under `-race`, some hanging up).
+**The tests I rely on most:**
+
+- `TestNoSecretLeaks`: all 68 secrets in the sample are gone from stdout
+  and stderr.
+- `TestGeneratedLeakCorpus`: 1,819 generated lines that hide secrets under
+  58 spellings of secret names, in every place I could think of (nested
+  JSON, JSON inside strings, forms, URLs, XML, multipart, free text,
+  headers). Its first run found 6 kinds of leaks.
+- `TestExpectedOutput`: the full output for the sample, which I checked
+  line by line.
+- `TestRedactStreamsLineByLine`: the client reads line 1 before it sends
+  line 2, so a server that buffers would hang.
+- `TestMemoryStaysFlat`, `TestProcessWorkersKeepOrder` (1, 2 and 8 workers
+  give exactly the same output) and `TestManyConcurrentClients` (60 clients
+  under `-race`, some of them hanging up halfway).
 
 ## 2. Design and trade-offs
 
-**Pipeline per line:** read, parse into a JSON tree, apply key rules and
-value rules by scope, write back compact.
+Each line goes through the same steps: read it, parse it into a JSON tree,
+apply the rules, write it back.
 
-**Streaming.** Lines are read with `bufio.Reader.ReadSlice`, so a line over
-the limit is dropped piece by piece and never held (`bufio.Scanner` fails
-over 64 KiB). Memory is bounded by the longest line plus one 1 MiB batch;
-time is linear, since Go's RE2 regexes cannot backtrack. Batches hold only
-lines already waiting, are redacted in parallel and written in order, and
-output is flushed whenever no full line is waiting, so `tail -f | redactor`
-and a client sending line by line get each line back at once.
+**Streaming.** I read lines with `bufio.Reader.ReadSlice` rather than
+`bufio.Scanner`, which fails on lines over 64 KiB. A line over the limit is
+skipped piece by piece, so it is never held in memory. Memory is bounded by
+the longest line plus one 1 MiB batch, whatever the size of the input, and
+time grows linearly because Go's regex engine (RE2) never backtracks. Lines
+that are already waiting are redacted in parallel and written back in their
+original order. The output is flushed whenever no full line is waiting, so
+`tail -f access.log | redactor`, or a client sending one line at a time,
+gets each line back right away.
 
-**Parsing and recursion.** A small tree of my own built from
-`encoding/json` tokens, not `map[string]any`: a map drops duplicate keys
-(line 25), loses key order and turns `12345678901234567890` into a float.
-The tree writes untouched lines back exactly. Nesting is limited to 1,000
-levels and 3 levels of JSON inside a string.
+**Parsing and recursion.** I parse each line into a small tree of my own
+instead of `map[string]any`. A map would drop duplicate keys (line 25 has
+two `email` keys), lose the key order and turn `12345678901234567890` into
+a float. The tree writes an untouched line back exactly as it came.
+Nesting is capped at 1,000 levels, and at 3 levels of JSON inside a string,
+so a crafted line cannot exhaust the stack.
 
 **Rule matching.**
-- Key rules: `headers` scope for header names, `body` for every other JSON
-  field, including unexpected top-level ones; a line that is not an object
-  gets every rule. Header lists of `{"name","value"}` (HAR) work too.
-- Under a matching key, numbers and booleans are redacted through their
-  text and become strings, objects and arrays keep their structure, and
-  `null` and `""` stay.
-- Value rules run on every string, on object keys and on integer numbers (a
-  card can arrive as a number). Overlapping matches merge into one region
-  with the strongest action (mask, then hash, then partial), so a password
-  inside an email-shaped match is masked, not hashed.
-- When Luhn rejects a match, the engine searches inside it: in
-  `qty 2 4111 1111 1111 1111` the 17-digit run fails, but the card inside
-  it must not leak.
-- String bodies are tried as JSON, then as a form (by `Content-Type` or
-  shape), then as text. Query strings in `path` are forms.
+- Key rules look at names. Header names get the `headers` rules, and every
+  other JSON field gets the `body` rules, including unexpected top-level
+  fields. A line that is valid JSON but not an object gets all the rules,
+  because I cannot tell what it is. Headers logged as a list of
+  `{"name": ..., "value": ...}` objects (HAR files) work too.
+- Under a matching key, numbers and booleans are redacted and become
+  strings, objects and arrays keep their shape, and `null` and `""` stay as
+  they are, since there is nothing to hide.
+- Value rules look at content: every string, every object key, and integer
+  numbers, because a card can arrive as a number. When two matches overlap,
+  they merge and the strongest action wins (mask, then hash, then partial).
+  That way a password that happens to look like part of an email is masked,
+  not hashed.
+- When Luhn rejects a match, I look for a valid card inside it. In
+  `qty 2 4111 1111 1111 1111` the regex first grabs 17 digits, which fail
+  Luhn, and without this step the real card would leak.
+- A body that is a string is tried as JSON, then as a form, then as plain
+  text. The query string in `path` is treated as a form.
 
-**Failure handling.** A line that is not JSON, too deep, too big or too long
-becomes `{"_redactor":{"error":"invalid_json","line":20}}`: the reason and
-line number, no input data. I do not redact it as text: some secrets are
-found only by their field name, and a broken line has none. stderr never
-gets the decoder's message, which quotes the input. Empty lines are kept,
-so output line N is input line N. Rules are validated strictly (typos,
-bad regexes, duplicate names, a pattern that matches `****` itself), all
-errors at once.
+**When something goes wrong.** A line that is not valid JSON, or is too
+deep, too big or too long, is replaced by
+`{"_redactor":{"error":"invalid_json","line":20}}`: only the reason and the
+line number, no input data. I chose not to redact it as text instead,
+because some secrets can only be found by their field name, and a broken
+line has no structure to find names in. Errors on stderr never include the
+JSON parser's message, since that message quotes the input. Empty lines
+stay, so output line N is always input line N. A broken rules file stops
+everything, with all its errors listed at once.
 
-**Idempotency.** Hashes are written `sha256:<hex>` (or `hmac-sha256:`), and
-a value already in that form is not hashed again: without the prefix a
-hashed field changes on every run, and treating any 64-hex string as a hash
-would pass real hex API keys. This is the one place I add to "replace with
-the SHA-256". Text is re-scanned until nothing changes, because the fuzzer
-found masking that created a new match. A card inside a run of digit groups
-masks the whole run, because masking each card can leave digits that form
-a new card.
+**Running twice changes nothing.** A hash is written as `sha256:<hex>`, and
+a value already in that form is not hashed again. Without the prefix, a
+hashed field would change on every run, and treating any 64-character hex
+string as "already hashed" would let real hex API keys through. This is the
+one place where I add to the brief's "replace with the SHA-256". The fuzzer
+also showed that masking can create a new match, so text is scanned again
+until nothing changes. For the same reason, a card inside a run of digit
+groups masks the whole run.
 
-**For threat detection** the signal stays: `Bearer ****` keeps the auth
-scheme (`preserve_scheme`, known schemes only), emails and API keys are
-hashed so a user stays visible across requests, and HMAC (required in
-Kubernetes) stops reversing a hash by guessing candidates.
+**Keeping the signal for threat detection.** These logs are used to detect
+attacks, so I tried to hide the secret but keep what is useful.
+`Bearer ****` keeps the auth scheme (`preserve_scheme`, for known schemes
+only). Emails and API keys are hashed instead of masked, so you can still
+see the same user across requests. Because a plain SHA-256 of an email can
+be reversed by guessing, the tool uses HMAC with a secret key when one is
+set, and in Kubernetes it is required.
 
-**Config changes** (allowed if documented): `preserve_scheme` on key rules
-and `group: N` on value rules, to mask only the value in `password=****`.
-The rules now match secret names with any prefix or plural (`newPassword`,
+**Changes to the config** (the brief allows them if documented): I added
+`preserve_scheme` for key rules and `group: N` for value rules, so
+`password=hunter2` becomes `password=****` and not `****`. I also extended
+the rules: secret names with any prefix or plural (`newPassword`,
 `AWS_SECRET_ACCESS_KEY`, `user[password]`, but not `max_tokens`), more
-credential headers, known key formats (GitHub, Slack, AWS, Stripe,
-OpenAI), PEM keys, credentials in URLs, and named secrets inside text,
-broken JSON, XML and multipart.
+credential headers, known key formats (GitHub, Slack, AWS, Stripe, OpenAI),
+private keys, passwords in URLs, and named secrets inside free text, broken
+JSON, XML and multipart bodies.
 
 ## 3. The JWT report
 
-**Cause.** The `jwt` pattern used the standard base64 alphabet
-`[A-Za-z0-9+/=]`. JWTs are base64url (RFC 7515), which uses `-` and `_`.
+**What was wrong.** The `jwt` pattern used the standard base64 alphabet,
+`[A-Za-z0-9+/=]`. JWTs use base64url (RFC 7515), where `-` and `_` take
+the place of `+` and `/`.
 
-**Effect in the sample**, worse than missed tokens: lines 11 and 16 have
-`_` in the payload and were not matched at all; line 15 has `_` only in the
-signature, so the output read `****_adQssw5c`, a partial leak that looks
-redacted.
+**What it did in the sample** was worse than just missing tokens. Lines 11
+and 16 have `_` in the payload, so they were not matched at all. Line 15
+has `_` only in the signature, so the match stopped there and the output
+read `****_adQssw5c`: a partial leak that looks redacted, which is the
+dangerous kind.
 
-**Fix** (commit `Fix JWT pattern missing base64url tokens`): the base64url
-alphabet plus `=`, 2 to 5 segments (5 is an encrypted JWE), and
-`access_token`, `refresh_token`, `id_token` as secret field names. The
-regression tests were written first and failed on the original rules. A
-review later showed that also accepting `/` made a token in a URL path
-swallow the rest of the path, so standard base64 is out again.
+**What I did** (commit `Fix JWT pattern missing base64url tokens`): I wrote
+the regression tests first and checked that they failed on the original
+rules. Then I changed the pattern to base64url plus `=`, with 2 to 5
+segments (an encrypted JWT has 5), and added `access_token`,
+`refresh_token` and `id_token` to the secret field names. At first I also
+accepted `/`, but a review showed that a token inside a URL path then
+swallowed the rest of the path, so I took it out again.
 
-**Same kind of bug, found along the way:** the card pattern
-`\b\d{13,19}\b` missed cards with spaces or dashes (lines 1, 6, 36, 44).
+**A similar bug I found along the way:** the card pattern `\b\d{13,19}\b`
+missed cards written with spaces or dashes (lines 1, 6, 36 and 44).
 
 ## 4. Deployment
 
@@ -215,52 +238,60 @@ kubectl -n redactor create secret generic redactor-hash-key --from-literal=key="
 kubectl -n redactor port-forward service/redactor 8080:80
 ```
 
-- **Image:** static Go binary on `distroless/static`, non-root, about 16 MB,
-  base images pinned by digest.
-- **Pods:** 2 replicas spread over nodes, rolling updates with
-  `maxUnavailable: 0`, readiness and liveness probes, read-only root
-  filesystem, all capabilities dropped, under the `restricted` Pod Security
-  Standard.
-- **Memory:** 1Gi limit, lines up to 1 MiB and 4 requests at once. The
-  worst line I found (dense short emails, which grow 10x when hashed) peaks
-  at 397 MiB for 4 requests. `GOMEMLIMIT` sits below the limit; no CPU limit,
-  which would throttle the pod even on an idle node.
-- **Rules:** a ConfigMap whose name carries a hash of its content, so a
-  rules change rolls the pods. Broken rules on kind left the new pod in
-  CrashLoopBackOff while the old pods kept serving.
-- **Shutdown:** on SIGTERM `/readyz` fails first, then running requests get
-  20 s inside the 30 s grace period.
-- **HMAC key** comes from a Secret, never git; without it the pods do not
-  start.
+I tested all of this on a local kind cluster.
+
+- **Image:** a static Go binary on `distroless/static`, running as non-root.
+  It has no shell and no package manager, it is about 16 MB, and the base
+  images are pinned by digest.
+- **Pods:** 2 replicas spread across nodes, and updates that start a new pod
+  before stopping an old one. The pods run with a read-only filesystem and
+  no extra permissions, and the namespace enforces the `restricted` Pod
+  Security Standard.
+- **Memory:** a 1Gi limit, lines up to 1 MiB and 4 requests at a time. The
+  worst line I could find (lots of short emails, which grow 10x when
+  hashed) used 397 MiB for 4 requests. I did not set a CPU limit, because
+  it slows the pod down even when the node has CPU to spare.
+- **Rules:** a ConfigMap whose name includes a hash of its content, so
+  changing the rules rolls out new pods. When I deployed a broken rules
+  file on purpose, the new pod failed to start and the old pods kept
+  serving.
+- **Shutdown:** on SIGTERM the pod first stops receiving new traffic, then
+  gives running requests 20 seconds to finish.
+- **HMAC key:** it comes from a Secret and is never in git. Without it the
+  pods do not start, instead of quietly falling back to plain SHA-256.
 
 ## 5. Known limitations, and what I would do with more time
 
-- **Luhn false positives:** about 1 in 10 random 13–19 digit numbers pass,
-  so some 64-bit IDs and millisecond timestamps get masked. I kept it: a
-  corrupted ID is better than a leaked card. Next: an optional
-  network-prefix validator.
-- **Cards glued to letters** (`card4111…`) are missed: the provided pattern
-  needs a word boundary, and without it about 1 hex ID in 400 would be
-  corrupted.
-- **Over-masking:** two cards separated only by a space keep the last 4
-  digits of the second only; any header containing `auth` is masked,
-  including `:authority`.
-- **Not understood:** base64 or compressed bodies, header pairs as arrays,
-  XML `CDATA`, cut-off JSON inside a string (only text rules run there).
-- **Throughput:** 3.4 MB/s per core; secret names with any prefix cost about
-  a third. Next: a cheap prefilter per rule (no `@`, no email search).
-- **Service:** no authentication (meant to sit behind a NetworkPolicy);
-  metrics count a request when it ends.
+- **Luhn false positives.** About 1 in 10 random 13 to 19 digit numbers
+  pass Luhn, so some long IDs and millisecond timestamps get masked. I
+  decided a broken ID is better than a leaked card. Next step: an optional
+  check of card network prefixes.
+- **Cards glued to letters** (`card4111…`) are missed, because the provided
+  pattern needs a word boundary. Removing it would corrupt about 1 hex ID
+  in 400, so I left it.
+- **Hiding a bit too much:** two cards separated by just a space keep only
+  the last 4 digits of the second, and any header with `auth` in its name
+  is masked, including `:authority`.
+- **Formats I do not handle:** base64 or compressed bodies, headers as
+  arrays of pairs, XML `CDATA`, and JSON inside a string that was cut off,
+  where only the text rules run.
+- **Speed:** 3.4 MB/s per core. About a third of that goes to catching
+  secret names with a prefix (`newPassword`). Next step: a cheap check
+  before each rule, for example skipping the email regex when there is no
+  `@`.
+- **The service** has no authentication (it is meant to run behind a
+  NetworkPolicy), and metrics count a request only when it ends.
 
 ## 6. Inline on live traffic, under a millisecond per request
 
-I would stop treating it as log processing. Run it in the proxy (an Envoy or
-NGINX filter, or a library call in the data plane) instead of an HTTP hop,
-and redact per request, not per NDJSON line. Skip the JSON tree: scan the raw
-bytes once, with all value patterns compiled into a single automaton
-(Hyperscan or an RE2 set) and a literal prefilter so most bodies are rejected
-without running a regex, and keep header rules as a hash lookup. Allocate
-nothing per request (reused buffers), drop the re-scan loop by validating at
-load time that rules cannot create new matches, and cap the work per request:
-over budget, mask the whole body and flag it rather than pass it through.
-Then measure p99 latency on real traffic, not averages.
+I would stop treating it as log processing. It would run inside the proxy
+(an Envoy or NGINX filter, or a library call) instead of as a separate HTTP
+hop, and work on each request instead of on NDJSON lines. I would skip
+building a JSON tree and scan the raw bytes once, with all the value
+patterns compiled together (Hyperscan or an RE2 set) and a quick literal
+check so most bodies never reach a regex, and keep header rules as a simple
+lookup. I would allocate nothing per request, check when the rules are
+loaded that they cannot create new matches, so the second scan is not
+needed, and set a time budget per request: over budget, the whole body is
+masked and flagged rather than passed through. Then I would measure p99
+latency on real traffic, not the average.
