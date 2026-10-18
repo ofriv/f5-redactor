@@ -143,6 +143,22 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		context.AfterFunc(ctx, stop)
 		logger.Info("rules loaded", "key_rules", len(cfg.KeyRules), "value_rules", len(cfg.ValueRules), "hashing", eng.HashAlgorithm())
 		srv := server.New(eng, server.Options{MaxLineBytes: *maxLine, Workers: *workers, MaxConcurrent: *maxConcurrent, IdleTimeout: *idleTimeout, Logger: logger})
+		// SIGHUP reloads the rules file. Rules that do not load are logged
+		// and the current ones stay in use.
+		hup := make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		defer signal.Stop(hup)
+		go func() {
+			for range hup {
+				_ = srv.Reload(func() (*redact.Engine, error) {
+					cfg, err := config.Load(*rulesPath)
+					if err != nil {
+						return nil, err
+					}
+					return redact.New(cfg, engineOpts...), nil
+				})
+			}
+		}()
 		if err := runServer(ctx, ln, srv, logger, *shutdownDelay); err != nil {
 			logger.Error("server failed", "error", err.Error())
 			return exitFailure

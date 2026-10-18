@@ -50,15 +50,23 @@ curl --data-binary @input.ndjson localhost:8080/redact
 | `POST /redact` | NDJSON in, redacted NDJSON out, streamed. The per-request summary comes as the `X-Redactor-Summary` trailer and in the server log. Works with `Expect: 100-continue`, which curl sends for bodies over 1 MiB. |
 | `GET /healthz` | liveness: `200` while the process answers |
 | `GET /readyz` | readiness: `200` while serving, `503` once shutdown has started (the server only starts after the rules loaded) |
+| `GET /metrics` | Prometheus counters: requests by result, lines read, rejected lines by reason, redactions by rule, rule reloads; never input data |
 
 The server is built from rules that already loaded. If `rules.yaml` is
 missing or invalid the process exits (code 2) before it listens, so traffic
 is never passed through unredacted.
 
+`kill -HUP <pid>` reloads `rules.yaml` without a restart. Rules that do not
+load are logged and counted, and the rules in use stay. A request that is
+already running finishes with the rules it started with: each request takes
+the current engine when it starts, and a reload swaps it atomically. In
+Kubernetes a rules change already rolls the pods (section 4), so reload is
+for running the service elsewhere.
+
 **Tests**
 
 ```bash
-go test ./...            # 422 tests; -short skips the 64 MiB memory test
+go test ./...            # 424 tests; -short skips the 64 MiB memory test
 go test -race ./...
 go test ./internal/redact -run '^$' -fuzz FuzzRedactLine -fuzztime 60s
 go test ./internal/stream -run '^$' -bench . -benchtime 5s
@@ -385,8 +393,8 @@ The pods wait for the Secret and start once it exists.
   prefix (`newPassword`) costs about a third of it, since the name list is
   tried at every letter rather than only at word starts. Next: a cheap
   per-rule prefilter (no `@`, no email search).
-- **Not done from the bonus list:** Prometheus metrics, hot reload of the
-  rules (in Kubernetes a rules change already rolls the pods).
+- **Metrics** are counted when a request ends, so a long stream shows up in
+  `/metrics` when it finishes.
 - **Service:** no authentication (meant to run inside the cluster behind a
   NetworkPolicy, not included), no request compression.
 

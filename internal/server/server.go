@@ -2,12 +2,13 @@
 //
 //	POST /redact   NDJSON in, redacted NDJSON out, streamed line by line
 //	GET  /healthz  liveness: 200 while the process can answer at all
-//	GET  /readyz   readiness: 200 when rules are loaded and the server is
-//	               not shutting down, 503 otherwise
+//	GET  /readyz   readiness: 200 while serving, 503 once shutdown started
+//	GET  /metrics  Prometheus counters (requests, lines, redactions by rule)
 //
 // The server is only built from an already loaded rule set, so it cannot
 // run without rules: if rules.yaml cannot be loaded, the process exits
-// before it listens, and no traffic is ever passed through unredacted.
+// before it listens, and no traffic is ever passed through unredacted. A
+// rules reload (Reload) that fails keeps the rules in use.
 package server
 
 import (
@@ -49,7 +50,11 @@ type Options struct {
 
 // Server serves the redaction API.
 type Server struct {
-	engine  *redact.Engine
+	// engine is swapped as a whole by Reload. Each request takes the
+	// current one when it starts and keeps it to the end, so a reload never
+	// changes the rules in the middle of a stream.
+	engine  atomic.Pointer[redact.Engine]
+	metrics *metrics
 	opts    Options
 	slots   chan struct{} // one token per running /redact request
 	ready   atomic.Bool
@@ -72,17 +77,19 @@ func New(eng *redact.Engine, opts Options) *Server {
 		opts.Logger = slog.New(slog.DiscardHandler)
 	}
 	s := &Server{
-		engine: eng,
-		opts:   opts,
-		slots:  make(chan struct{}, opts.MaxConcurrent),
-		logger: opts.Logger,
+		metrics: newMetrics(),
+		opts:    opts,
+		slots:   make(chan struct{}, opts.MaxConcurrent),
+		logger:  opts.Logger,
 	}
+	s.engine.Store(eng)
 	s.ready.Store(true)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /redact", s.handleRedact)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /readyz", s.handleReady)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	s.handler = mux
 	return s
 }
@@ -94,6 +101,27 @@ func (s *Server) Handler() http.Handler { return s.handler }
 // so the load balancer stops sending new requests while running ones
 // finish.
 func (s *Server) SetReady(ready bool) { s.ready.Store(ready) }
+
+// Reload replaces the rules with the engine load returns. If load fails,
+// the rules in use stay, so the service never runs without rules. Requests
+// already running finish with the rules they started with.
+func (s *Server) Reload(load func() (*redact.Engine, error)) error {
+	eng, err := load()
+	if err != nil {
+		s.metrics.reloaded(false)
+		s.logger.Error("rules reload failed, keeping the current rules", "error", err.Error())
+		return err
+	}
+	s.engine.Store(eng)
+	s.metrics.reloaded(true)
+	s.logger.Info("rules reloaded", "rules", len(eng.RuleNames()))
+	return nil
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_ = s.metrics.write(w, s.engine.Load().RuleNames(), len(s.slots))
+}
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -117,6 +145,7 @@ func (s *Server) handleRedact(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "too many concurrent requests", http.StatusServiceUnavailable)
+		s.metrics.busy()
 		s.logger.Warn("redact request rejected", "reason", "too_many_requests")
 		return
 	}
@@ -159,7 +188,7 @@ func (s *Server) handleRedact(w http.ResponseWriter, r *http.Request) {
 		}
 		return rc.Flush()
 	}
-	stats, err := stream.Process(r.Body, out, s.engine, stream.Options{
+	stats, err := stream.Process(r.Body, out, s.engine.Load(), stream.Options{
 		MaxLineBytes: s.opts.MaxLineBytes,
 		Workers:      s.opts.Workers,
 		Flush:        flush,
@@ -182,6 +211,8 @@ func (s *Server) handleRedact(w http.ResponseWriter, r *http.Request) {
 	if b, jerr := json.Marshal(summary); jerr == nil {
 		w.Header().Set(summaryTrailer, string(b))
 	}
+
+	s.metrics.finished(stats, err != nil, time.Since(start))
 
 	attrs := []any{
 		"lines_read", stats.LinesRead,
