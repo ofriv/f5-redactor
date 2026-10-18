@@ -1,8 +1,10 @@
 // Command redactor redacts sensitive data from NDJSON API traffic logs.
 //
 //	redactor [--rules rules.yaml] [input-file]   # reads stdin if no file is given
+//	redactor --serve --addr :8080 --rules /etc/redactor/rules.yaml
 //
 // The redacted NDJSON goes to stdout; warnings and the summary go to stderr.
+// With --serve it runs the HTTP service instead (see internal/server).
 //
 // Exit codes:
 //
@@ -13,14 +15,21 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
+	"net"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"f5-redactor/internal/config"
 	"f5-redactor/internal/redact"
+	"f5-redactor/internal/server"
 	"f5-redactor/internal/stream"
 )
 
@@ -42,8 +51,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	maxLine := fs.Int("max-line-bytes", stream.DefaultMaxLineBytes, "longest accepted input line, in bytes")
 	summaryFormat := fs.String("summary-format", "text", "summary format on stderr: text or json")
 	checkConfig := fs.Bool("check-config", false, "validate the rules file and exit")
+	serve := fs.Bool("serve", false, "run the HTTP service instead of processing a file")
+	addr := fs.String("addr", ":8080", "listen address for --serve")
+	maxConcurrent := fs.Int("max-concurrent", server.DefaultMaxConcurrent, "most /redact requests served at once (--serve)")
+	shutdownDelay := fs.Duration("shutdown-delay", 5*time.Second, "time between failing /readyz and closing the listener at shutdown (--serve)")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: redactor [flags] [input-file]")
+		fmt.Fprintln(stderr, "       redactor --serve [--addr :8080] [flags]")
 		fmt.Fprintln(stderr, "Reads NDJSON from input-file (or stdin) and writes it redacted to stdout.")
 		fs.PrintDefaults()
 	}
@@ -66,6 +80,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "redactor: --max-line-bytes must be positive")
 		return exitUsage
 	}
+	if *serve && fs.NArg() > 0 {
+		fmt.Fprintln(stderr, "redactor: --serve does not take an input file")
+		return exitUsage
+	}
+	if *maxConcurrent <= 0 {
+		fmt.Fprintln(stderr, "redactor: --max-concurrent must be positive")
+		return exitUsage
+	}
 
 	// Load the rules before touching the input: with broken rules nothing
 	// is processed, so nothing can pass through unredacted.
@@ -76,6 +98,24 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if *checkConfig {
 		fmt.Fprintf(stdout, "%s: OK (%d key rules, %d value rules)\n", *rulesPath, len(cfg.KeyRules), len(cfg.ValueRules))
+		return exitOK
+	}
+	eng := redact.New(cfg)
+
+	if *serve {
+		logger := slog.New(slog.NewJSONHandler(stderr, nil))
+		ln, err := net.Listen("tcp", *addr)
+		if err != nil {
+			logger.Error("listen failed", "addr", *addr, "error", err.Error())
+			return exitFailure
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		srv := server.New(eng, server.Options{MaxLineBytes: *maxLine, MaxConcurrent: *maxConcurrent, Logger: logger})
+		if err := runServer(ctx, ln, srv, logger, *shutdownDelay); err != nil {
+			logger.Error("server failed", "error", err.Error())
+			return exitFailure
+		}
 		return exitOK
 	}
 
@@ -90,7 +130,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		in = f
 	}
 
-	eng := redact.New(cfg)
 	out := bufio.NewWriterSize(stdout, 64<<10)
 	stats, err := stream.Process(in, out, eng, stream.Options{
 		MaxLineBytes: *maxLine,
