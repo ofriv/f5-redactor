@@ -139,9 +139,12 @@ that cannot be parsed becomes an error record.
 - **Value rules** run on every string, on object keys (maps keyed by email
   are common), and on integer JSON numbers (a card can arrive as a number).
   All rules match on the original text; overlapping matches are merged into
-  one region that gets the action of the rule listed first, and `partial`
-  becomes `mask` when the region came from different rules, since its last 4
-  characters could belong to the other match.
+  one region that gets the strongest action (mask or remove, then hash, then
+  partial; the rule listed first on a tie). Otherwise a password next to a
+  host (`https://u:s3cret@db.internal`) would be hashed by the email rule,
+  and a plain hash can be reversed by guessing. `partial` becomes `mask`
+  when the region came from different rules, since its last 4 characters
+  could belong to the other match.
 - **Validators.** When Luhn rejects a match, the engine looks for a valid
   match inside it: in `qty 2 4111 1111 1111 1111` the regex first takes the
   17-digit run, which fails Luhn, and the card inside it would leak.

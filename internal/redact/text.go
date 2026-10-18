@@ -76,7 +76,7 @@ func (e *Engine) redactTextOnce(s string, counts Counts) (string, bool) {
 		j := i + 1
 		for ; j < len(matches) && matches[j].start < region.end; j++ {
 			region.end = max(region.end, matches[j].end)
-			region.rule = min(region.rule, matches[j].rule)
+			region.rule = e.stronger(region.rule, matches[j].rule)
 			if matches[j].rule != first {
 				mixed = true
 			}
@@ -102,6 +102,29 @@ func (e *Engine) redactTextOnce(s string, counts Counts) (string, bool) {
 	}
 	b.WriteString(s[last:])
 	return b.String(), changed
+}
+
+// stronger returns the rule whose action hides more, or the one listed first
+// if they hide the same. A merged region gets the strongest action: a
+// password inside an email-shaped match (s3cret@db.internal) must be masked,
+// not hashed, since a plain hash can be reversed by guessing.
+func (e *Engine) stronger(a, b int) int {
+	sa, sb := strength(e.valueRules[a].Action), strength(e.valueRules[b].Action)
+	if sb > sa || (sb == sa && b < a) {
+		return b
+	}
+	return a
+}
+
+func strength(a config.Action) int {
+	switch a {
+	case config.ActionMask, config.ActionRemove:
+		return 2 // nothing of the value is left
+	case config.ActionHash:
+		return 1
+	default: // partial
+		return 0
+	}
 }
 
 // findMatches returns all validated matches of all value rules in s, minus

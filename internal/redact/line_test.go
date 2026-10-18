@@ -170,12 +170,21 @@ func TestRedactLine(t *testing.T) {
 			counts: Counts{},
 		},
 		{
-			// The text rule http-header-dump and the email rule overlap; the
-			// merged region gets the action of email, listed first.
+			// The text rule http-header-dump (mask) and the email rule (hash)
+			// overlap; the merged region gets the stronger action, mask.
 			name:   "headers that are not an object are still scanned",
 			in:     `{"headers":"Authorization: Bearer x a@b.com"}`,
-			want:   `{"headers":"Authorization: Bearer ` + h("x a@b.com") + `"}`,
-			counts: Counts{"email": 1},
+			want:   `{"headers":"Authorization: Bearer ****"}`,
+			counts: Counts{"http-header-dump": 1},
+		},
+		{
+			// The email rule (hash, listed first) also matches
+			// "s3cret@db.internal". Hashing it would publish a plain SHA-256
+			// of the password, which can be reversed by guessing.
+			name:   "a password next to a host is masked, not hashed",
+			in:     `{"body":"https://alice:s3cret@db.internal:5432/x"}`,
+			want:   `{"body":"https://alice:****:5432/x"}`,
+			counts: Counts{"url-credentials": 1},
 		},
 	}
 	for _, tt := range tests {

@@ -187,7 +187,7 @@ func TestRedactTextOverlappingMatches(t *testing.T) {
 		{
 			// "abc-123" and "123-xyz" overlap on "123". Picking only one of
 			// them would leave "xyz" or "abc" in the output.
-			name: "partial overlap: whole region masked, first rule wins",
+			name: "partial overlap: whole region masked, the stronger action wins",
 			rules: `
   - { name: first, pattern: 'abc-\d+', action: mask }
   - { name: second, pattern: '\d+-xyz', action: hash }
@@ -197,7 +197,7 @@ func TestRedactTextOverlappingMatches(t *testing.T) {
 			counts: Counts{"first": 1},
 		},
 		{
-			name: "rule order decides, not position in the text",
+			name: "same strength: rule order decides, not position in the text",
 			rules: `
   - { name: first, pattern: '\d+-xyz', action: mask }
   - { name: second, pattern: 'abc-\d+', action: remove }
@@ -212,7 +212,7 @@ func TestRedactTextOverlappingMatches(t *testing.T) {
 			name: "partial is upgraded to mask when rules overlap",
 			rules: `
   - { name: card, pattern: '\d{8}', action: partial }
-  - { name: tail, pattern: '\d{4}[a-z]{4}', action: remove }
+  - { name: tail, pattern: '\d{4}[a-z]{4}', action: partial }
 `,
 			in:     "x 12345678abcd y",
 			want:   "x **** y",
@@ -229,10 +229,20 @@ func TestRedactTextOverlappingMatches(t *testing.T) {
 			counts: Counts{"card": 1},
 		},
 		{
-			name: "nested match: whole outer region gets the first rule's action",
+			name: "nested match: whole outer region gets the stronger action",
 			rules: `
   - { name: inner, pattern: 'secret', action: hash }
   - { name: outer, pattern: 'my-secret-value', action: mask }
+`,
+			in:     "[my-secret-value]",
+			want:   "[****]",
+			counts: Counts{"outer": 1},
+		},
+		{
+			name: "nested match, same strength: the first rule's action",
+			rules: `
+  - { name: inner, pattern: 'secret', action: hash }
+  - { name: outer, pattern: 'my-secret-value', action: hash }
 `,
 			in:     "[my-secret-value]",
 			want:   "[" + Hash("my-secret-value") + "]",
