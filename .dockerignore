@@ -1,0 +1,11 @@
+# Only what the build needs goes into the build context.
+.git
+.dockerignore
+Dockerfile
+deploy/
+*.md
+**/testdata/
+*.test
+*.out
+*.prof
+/redactor
