@@ -19,6 +19,18 @@ func New(cfg *config.Config) *Engine {
 	}
 }
 
+// RuleNames returns the names of all rules, key rules first, in config order.
+func (e *Engine) RuleNames() []string {
+	names := make([]string, 0, len(e.keyRules)+len(e.valueRules))
+	for _, r := range e.keyRules {
+		names = append(names, r.Name)
+	}
+	for _, r := range e.valueRules {
+		names = append(names, r.Name)
+	}
+	return names
+}
+
 // Counts records how many redactions each rule made, keyed by rule name.
 // A nil Counts is allowed and records nothing.
 type Counts map[string]int
