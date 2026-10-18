@@ -49,12 +49,14 @@ spec:
             - name: http
               containerPort: 8080
           env:
-            # Tell the Go garbage collector the container's memory limit, so
-            # it collects harder before the kernel would kill the pod.
+            # Tell the Go garbage collector to work harder as memory nears
+            # this target, so it can free memory before the kernel kills the
+            # pod at the 1Gi limit. The target is a soft limit that Go may
+            # briefly pass, so it is set about 10% below the hard limit
+            # (commonly recommended: 80-90%). Keep it in step with
+            # resources.limits.memory below.
             - name: GOMEMLIMIT
-              valueFrom:
-                resourceFieldRef:
-                  resource: limits.memory
+              value: "900MiB"
             # HMAC key for the hash action. It lives in a Secret, never in
             # git. Not optional: without the Secret the pod does not start,
             # instead of silently falling back to plain SHA-256. Create it
