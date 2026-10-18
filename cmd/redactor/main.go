@@ -96,6 +96,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		MaxLineBytes: *maxLine,
 		Warnings:     stderr,
 		MaxWarnings:  20,
+		// Flush whenever the input has no full line waiting, so piping a
+		// live log (tail -f access.log | redactor) shows each line at once.
+		Flush: out.Flush,
 	})
 	if flushErr := out.Flush(); err == nil && flushErr != nil {
 		err = fmt.Errorf("write output: %w", flushErr)

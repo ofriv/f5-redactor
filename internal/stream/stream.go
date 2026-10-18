@@ -36,9 +36,15 @@ type Options struct {
 	// MaxWarnings caps the number of warning messages, so a broken input
 	// cannot flood the log. The summary still counts every line.
 	MaxWarnings int
-	// AfterLine, if set, is called after each output line is written. The
-	// HTTP service uses it to flush the response while streaming.
+	// AfterLine, if set, is called after each output line is written.
 	AfterLine func() error
+	// Flush, if set, is called after writing a line when no complete input
+	// line is waiting, i.e. just before a read that may block. A writer that
+	// buffers its output can then push what it has to the reader: a client
+	// streaming lines one by one gets each redacted line back right away,
+	// while a large upload is still written in big blocks. The caller must
+	// still flush once more after Process returns.
+	Flush func() error
 }
 
 // Process reads NDJSON from r, redacts every line with eng and writes the
@@ -123,6 +129,11 @@ func Process(r io.Reader, w io.Writer, eng *redact.Engine, opts Options) (*Stats
 				return stats, fmt.Errorf("write output: %w", err)
 			}
 		}
+		if opts.Flush != nil && !lr.hasBufferedLine() {
+			if err := opts.Flush(); err != nil {
+				return stats, fmt.Errorf("write output: %w", err)
+			}
+		}
 	}
 }
 
@@ -146,6 +157,13 @@ func newLineReader(r io.Reader, max int) *lineReader {
 }
 
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+
+// hasBufferedLine reports whether a whole line has already been read from
+// the input, so the next call to next will not block.
+func (lr *lineReader) hasBufferedLine() bool {
+	buffered, _ := lr.br.Peek(lr.br.Buffered())
+	return bytes.IndexByte(buffered, '\n') >= 0
+}
 
 // next returns the next line without its line ending ("\n" or "\r\n"). The
 // returned slice is only valid until the next call. If the line was longer

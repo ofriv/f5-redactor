@@ -237,3 +237,56 @@ func TestSummaryJSON(t *testing.T) {
 		t.Error("WriteJSON must not modify the stats")
 	}
 }
+
+// oneLineReader returns one line per Read call, like a client that sends
+// lines one at a time.
+type oneLineReader struct{ lines []string }
+
+func (r *oneLineReader) Read(p []byte) (int, error) {
+	if len(r.lines) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.lines[0])
+	r.lines = r.lines[1:]
+	return n, nil
+}
+
+func TestProcessFlushesWhenInputIsIdle(t *testing.T) {
+	eng := testEngine(t)
+
+	// Lines arriving one by one: flush after each, so each reaches the
+	// client before the next read blocks.
+	flushes := 0
+	_, err := Process(&oneLineReader{lines: []string{"{}\n", "{}\n", "{}\n"}}, io.Discard, eng, Options{
+		Flush: func() error { flushes++; return nil },
+	})
+	if err != nil || flushes != 3 {
+		t.Errorf("one line per read: err %v, flushes %d, want 3", err, flushes)
+	}
+
+	// A large upload already in the buffer: no flush until it runs out.
+	flushes = 0
+	_, err = Process(strings.NewReader(strings.Repeat("{}\n", 1000)), io.Discard, eng, Options{
+		Flush: func() error { flushes++; return nil },
+	})
+	if err != nil || flushes != 1 {
+		t.Errorf("buffered input: err %v, flushes %d, want 1", err, flushes)
+	}
+
+	// A partial line waiting in the buffer still triggers a flush: the next
+	// read will block until the rest of it arrives.
+	flushes = 0
+	_, err = Process(&oneLineReader{lines: []string{"{}\n{\"a\"", ":1}\n"}}, io.Discard, eng, Options{
+		Flush: func() error { flushes++; return nil },
+	})
+	if err != nil || flushes != 2 {
+		t.Errorf("partial line buffered: err %v, flushes %d, want 2", err, flushes)
+	}
+
+	_, err = Process(strings.NewReader("{}\n"), io.Discard, eng, Options{
+		Flush: func() error { return errors.New("client went away") },
+	})
+	if err == nil {
+		t.Error("a Flush error must stop processing")
+	}
+}
