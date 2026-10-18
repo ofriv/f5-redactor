@@ -28,6 +28,7 @@ func TestLoadShippedRules(t *testing.T) {
 		{"secret-fields", ScopeBody, ActionMask},
 		{"card-number-fields", ScopeBody, ActionPartial},
 		{"cvv-fields", ScopeBody, ActionRemove},
+		{"pii-fields", ScopeBody, ActionHash},
 	}
 	if len(cfg.KeyRules) != len(wantKey) {
 		t.Fatalf("got %d key rules, want %d", len(cfg.KeyRules), len(wantKey))
@@ -51,6 +52,7 @@ func TestLoadShippedRules(t *testing.T) {
 		{"jwt", "", ActionMask},
 		{"credit-card", ValidatorLuhn, ActionPartial},
 		{"api-key-prefix", "", ActionMask},
+		{"secret-assignment", "", ActionMask},
 	}
 	if len(cfg.ValueRules) != len(wantValue) {
 		t.Fatalf("got %d value rules, want %d", len(cfg.ValueRules), len(wantValue))

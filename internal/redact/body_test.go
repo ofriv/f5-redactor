@@ -83,10 +83,12 @@ func TestRedactBodyStrings(t *testing.T) {
 			counts: Counts{"secret-fields": 1},
 		},
 		{
+			// Has spaces, so it is text, not a form; the secret-assignment
+			// value rule catches the password.
 			name:   "free text with key=value is not a form (line 41)",
 			in:     `{"body":{"debug":"login attempt password=hunter2 for user=zed"}}`,
-			want:   `{"body":{"debug":"login attempt password=hunter2 for user=zed"}}`,
-			counts: Counts{},
+			want:   `{"body":{"debug":"login attempt **** for user=zed"}}`,
+			counts: Counts{"secret-assignment": 1},
 		},
 		{
 			name:   "base64 body is left alone (line 17)",
