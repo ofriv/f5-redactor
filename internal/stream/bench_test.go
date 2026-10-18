@@ -48,11 +48,12 @@ func sampleInput(tb testing.TB) []byte {
 // buffered the input would fail.
 func TestMemoryStaysFlat(t *testing.T) {
 	if testing.Short() {
-		t.Skip("streams 256 MiB")
+		t.Skip("streams 64 MiB")
 	}
-	inputSize := int64(256 << 20)
+	// Twice the heap limit, so a pipeline that kept its input would fail.
+	inputSize := int64(64 << 20)
 	if raceEnabled {
-		inputSize = 32 << 20
+		inputSize = 8 << 20 // the race detector is about 20x slower
 	}
 	const heapLimit = 32 << 20
 

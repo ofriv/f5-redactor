@@ -46,7 +46,7 @@ curl --data-binary @input.ndjson localhost:8080/redact
 
 | Endpoint | |
 |---|---|
-| `POST /redact` | NDJSON in, redacted NDJSON out, streamed. The per-request summary comes as the `X-Redactor-Summary` trailer and in the server log. |
+| `POST /redact` | NDJSON in, redacted NDJSON out, streamed. The per-request summary comes as the `X-Redactor-Summary` trailer and in the server log. Works with `Expect: 100-continue`, which curl sends for bodies over 1 MiB. |
 | `GET /healthz` | liveness: `200` while the process answers |
 | `GET /readyz` | readiness: `200` with rules loaded, `503` once shutdown has started |
 
@@ -57,7 +57,7 @@ is never passed through unredacted.
 **Tests**
 
 ```bash
-go test ./...            # 397 tests; -short skips the 256 MiB memory test
+go test ./...            # 415 tests; -short skips the 64 MiB memory test
 go test -race ./...
 go test ./internal/redact -run '^$' -fuzz FuzzRedactLine -fuzztime 60s
 go test ./internal/stream -run '^$' -bench . -benchtime 5s
@@ -67,9 +67,10 @@ The tests that matter most:
 
 - `TestNoSecretLeaks`: every secret in `input.ndjson` (68 values) is
   absent from stdout and stderr. `TestNoLeaksInHardCases` does the same
-  for cases found in two adversarial reviews.
-- `TestGeneratedLeakCorpus`: 1,250 generated lines hide secrets in every
-  combination of field-name spelling (35, from `password` to `X-API-KEY`),
+  for cases found in the reviews (see "How I worked").
+- `TestGeneratedLeakCorpus`: 1,658 generated lines hide secrets in every
+  combination of field-name spelling (52, from `password` to
+  `AWS_SECRET_ACCESS_KEY`),
   place (JSON at any depth, JSON inside strings up to 5 levels, forms, query
   strings, URLs, XML, multipart, free text, headers) and value shape (cards,
   emails, JWTs, API keys). None may survive. Its first run found 6 kinds of
@@ -80,7 +81,7 @@ The tests that matter most:
   and running on its own output changes nothing.
 - `TestRedactStreamsLineByLine`: the client reads line 1 before it sends
   line 2, so a buffering server would deadlock.
-- `TestMemoryStaysFlat`: 256 MiB through the pipeline, heap stays under
+- `TestMemoryStaysFlat`: 64 MiB through the pipeline, heap stays under
   32 MiB.
 - `TestManyConcurrentClients`: 60 clients at once under `-race`, a fifth of
   them hanging up halfway; every full response is correct and no goroutine
@@ -100,9 +101,12 @@ that cannot be parsed becomes an error record.
 - Memory is O(longest accepted line), independent of input size. Time is
   O(input size × number of rules); Go's RE2 regex engine is linear, so no
   input can make a pattern backtrack.
-- Measured on an Apple M5, one core: 10 MB/s on the sample; a 1 GiB input
-  took 107 s with 20 MiB peak RSS; `TestMemoryStaysFlat` peaks at 4.2 MiB
-  of heap.
+- Measured on an Apple M5, one core: 3.6 MB/s on the sample; a 256 MiB
+  input took 75 s with 20 MiB peak RSS; `TestMemoryStaysFlat` peaks at
+  4 MiB of heap. Most of the time is regex matching (see 5).
+- The worst line for memory is one full of short values: each becomes a tree
+  node and a redacted copy, about 12x the line in total. A line may hold at
+  most 200,000 JSON values; more is rejected as `too_many_values`.
 - Output is flushed whenever no complete input line is waiting. A client
   streaming lines (or `tail -f | redactor`) gets each line back at once; a
   big upload is still written in large blocks.
@@ -150,7 +154,8 @@ that cannot be parsed becomes an error record.
 
 ### 2.4 Failure handling
 
-- A line that is not JSON, nests too deep or is too long is replaced by
+- A line that is not JSON, nests too deep, holds too many values or is too
+  long is replaced by
   `{"_redactor":{"error":"invalid_json","line":20}}`: no input data, only the
   reason and the original line number. The output stays valid NDJSON and the
   consumer sees that a record was dropped.
@@ -159,8 +164,8 @@ that cannot be parsed becomes an error record.
   structure to find names in.
 - stderr gets `line 20: invalid_json`, never the decoder's message, which
   quotes the input. A test checks this.
-- Empty and whitespace-only lines are skipped and counted, which the NDJSON
-  spec allows if documented.
+- Empty and whitespace-only lines are written back as they are and counted,
+  so output line N is always input line N.
 - Rules are validated strictly: unknown fields (a typo like `acton`), bad
   regexes, unknown actions or validators, duplicate names, an empty rule set,
   or a pattern that matches `****` itself all stop the load, all reported at
@@ -175,11 +180,14 @@ sample, in unit tests and by fuzzing (millions of inputs).
   already in that exact form is not hashed again. Without the prefix a field
   whose rule is `hash` would be re-hashed on every run, and treating any
   64-character hex string as "already hashed" would pass real hex API keys
-  through. This is the one place I add to "replace with the SHA-256".
+  through. This is the one place I add to "replace with the SHA-256". Only
+  the hash itself is skipped: a secret written right next to it is still
+  found.
 - Text is re-scanned until nothing changes (at most 8 passes): deleting text
   can create a new match. The fuzzer found a case where masking removed the
   only space in a string, which then read as a form on the next run; whole
-  body strings are re-processed the same way now.
+  body strings and the query string in `path` are re-processed the same way
+  now.
 - `partial` on a value of 4 characters or less masks all of it, since keeping
   "the last 4" would reveal everything (line 38, `"card_number": "1234"`).
 - A card found inside a run of digit groups redacts the whole run. Redacting
@@ -213,20 +221,25 @@ Allowed by the brief if documented:
 
 Rules added or changed:
 
-- `secret-fields` also matches camelCase and kebab-case (`accessToken`,
-  `access-token`) and more names (`private_key`, `bearer_token`, ...);
+- `secret-fields` matches any name that ends in a secret word, in any
+  spelling: `password`, `newPassword`, `db_password`, `accessToken`,
+  `access-token`, `AWS_SECRET_ACCESS_KEY`, `sessionId`, `credentials`, ...;
   names are matched with surrounding spaces ignored.
-- `credential-headers`: any header whose name contains token, secret,
-  session, password, pwd, credential, signature or api-key.
+- `credential-headers`: any header whose name contains auth, cookie, token,
+  secret, session, password, pwd, passphrase, credential, signature, csrf,
+  xsrf, private-key or api-key.
 - `pii-fields`: ssn, phone, date of birth, hashed.
 - `api-key-prefix` also knows GitHub, GitLab, Slack, Google API keys, AWS
-  access key ids and Stripe restricted keys.
+  access key ids, Stripe restricted keys and webhook secrets, and OpenAI and
+  Anthropic keys.
 - New value rules: `url-credentials` (`https://user:****@host`),
-  `pem-private-key`, `http-header-dump` (`Authorization:` and `Cookie:`
+  `pem-private-key` (also a key cut off before its END line),
+  `bearer-token` (`Bearer <token>` anywhere in text),
+  `http-header-dump` (`Authorization:` and `Cookie:`
   written as text, as in a raw request in a log), and `secret-assignment`,
   `json-secret`, `xml-secret`, `multipart-secret` for named secrets in text
   (quoted or not), broken or deeply nested JSON, XML and multipart bodies.
-  The four share one list of names.
+  The four share one list of names with `secret-fields`.
 - The email rule also matches `%40` and international domains.
 
 ## 3. The JWT report
@@ -241,11 +254,14 @@ Rules added or changed:
   and the output read `****_adQssw5c`. That is a partial leak that looks
   redacted.
 
-**Fix** (commit `Fix JWT pattern missing base64url tokens`): both alphabets,
-2 to 5 segments (5 is an encrypted JWE, which the old pattern would cut in
+**Fix** (commit `Fix JWT pattern missing base64url tokens`): the base64url
+alphabet plus `=` (some producers pad), 2 to 5 segments (5 is an encrypted JWE, which the old pattern would cut in
 the middle), and `access_token`, `refresh_token` and `id_token` added to the
 secret field names so opaque tokens are hidden too. The regression tests
-were written first and failed on the original rules.
+were written first and failed on the original rules. My first fix accepted
+both alphabets; a later review showed that with `/` a token in a URL path
+also swallowed the rest of the path (`/v1/eyJ.../users/42`), so `+` and `/`
+are out again.
 
 **Same kind of bug, found along the way.** The card pattern `\b\d{13,19}\b`
 missed cards with spaces or dashes (lines 1, 6, 36, 44). Allowing separators
@@ -253,8 +269,20 @@ created a new leak, the 17-digit run above, fixed in the next commit.
 
 ## 4. Deployment
 
-`Dockerfile`, and Kubernetes manifests in `deploy/k8s` (apply with
-`kubectl apply -k deploy/k8s`).
+`Dockerfile`, and Kubernetes manifests in `deploy/k8s`. On a local kind
+cluster:
+
+```bash
+docker build -t redactor:0.1.0 .
+kind create cluster
+kind load docker-image redactor:0.1.0
+kubectl apply -k deploy/k8s
+kubectl -n redactor create secret generic redactor-hash-key --from-literal=key="$(openssl rand -hex 32)"
+kubectl -n redactor rollout status deployment/redactor
+kubectl -n redactor port-forward service/redactor 8080:80
+```
+
+The pods wait for the Secret and start once it exists.
 
 - **Image:** multi-stage. A static Go binary (`CGO_ENABLED=0`) on
   `distroless/static` running as non-root: no shell, no package manager,
@@ -266,8 +294,9 @@ created a new leak, the 17-digit run above, fixed in the next commit.
   Non-root, read-only root filesystem, all capabilities dropped, seccomp, no
   service account token; the namespace enforces the `restricted` Pod Security
   Standard.
-- **Resources:** memory limit 1Gi with `--max-concurrent=16`, since the worst
-  case is about (concurrent requests) × (a few times the longest line).
+- **Resources:** memory limit 1Gi with `--max-concurrent=8` and
+  `--max-line-bytes=4194304`: the worst case is about 8 requests × 4 MiB
+  lines × 12 (2.1), about 400 MiB.
   `GOMEMLIMIT=900MiB` so the garbage collector works harder before the limit.
   No CPU limit: it would throttle the pod even with idle CPU on the node.
 - **Rules:** a ConfigMap from kustomize's `configMapGenerator`, whose name
@@ -281,8 +310,7 @@ created a new leak, the 17-digit run above, fixed in the next commit.
   part too; doing it in the app
   also works outside Kubernetes and is tested.
 - **HMAC key:** `REDACTOR_HASH_KEY` from the Secret `redactor-hash-key`,
-  created once with
-  `kubectl -n redactor create secret generic redactor-hash-key --from-literal=key="$(openssl rand -hex 32)"`.
+  created once (above). It is never in git.
 - **Tried on kind:** deployed under the restricted policy; the output through
   the Service equals the expected file; with the Secret missing the pods do
   not start; deploying a broken regex left the new pod in CrashLoopBackOff
@@ -296,7 +324,10 @@ created a new leak, the 17-digit run above, fixed in the next commit.
   Luhn, so some 64-bit IDs (Twitter or Discord snowflakes, 18–19 digits) are
   partially masked. I kept Luhn only: checking card network prefixes would
   fix most of it but could miss rare networks (UATP airline cards start with
-  1), and in a redactor a corrupted ID is better than a leaked card. Next
+  1), and in a redactor a corrupted ID is better than a leaked card. The
+  same goes for JSON numbers: a 13-digit millisecond timestamp passes Luhn
+  1 time in 10 and is then masked and turned into a string. I kept value
+  rules on numbers, since a card stored as a number is a real case. Next
   step: an optional `card` validator for users who want the trade the other
   way.
 - **Neighbouring digits are over-masked:** a card inside a run of digit
@@ -309,9 +340,11 @@ created a new leak, the 17-digit run above, fixed in the next commit.
 - **Hashes and correlation:** with HMAC, rotating the key changes every
   hash; a key id in the prefix (`hmac-sha256:k2:`) would keep old logs
   comparable.
-- **Throughput:** 10 MB/s on one core, most of it in regex matching. Next:
-  a cheap per-rule prefilter (no `@`, no email search) and a worker pool that
-  keeps output order.
+- **Throughput:** 3.6 MB/s on one core, most of it in regex matching.
+  Matching secret names with any prefix (`newPassword`) costs about a third
+  of it, since the name list is tried at every letter rather than only at
+  word starts. Next: a cheap per-rule prefilter (no `@`, no email search)
+  and a worker pool that keeps output order.
 - **Not done from the bonus list:** worker pool, Prometheus metrics, hot
   reload of the rules (in Kubernetes a rules change already rolls the pods).
 - **Service:** no authentication (meant to run inside the cluster behind a
@@ -338,6 +371,11 @@ commit. After the core worked I reviewed the decisions twice: once against
 the brief and outside sources, which found the scope gap for unexpected
 fields and led to HMAC, and once by attacking the rules with crafted input,
 which found camelCase field names, more credential headers, XML and
-multipart bodies, and a stalled-client DoS in the service. Commits are small
-and in the order the work happened, including fixes to my own earlier
-commits.
+multipart bodies, and a stalled-client DoS in the service. Last, four
+independent AI reviews of the finished repo, each given only the brief and
+the code, found more: a `curl` upload over 1 MiB (`Expect: 100-continue`)
+lost its body, a line of many tiny values used far more memory than its
+size, a card written right after a hash was skipped, and more name
+spellings. Commits are small and each builds and passes its tests; fixes to
+my own earlier commits are separate commits, so the history shows what each
+review found.
