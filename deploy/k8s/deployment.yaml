@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redactor
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Start a new pod before stopping an old one, so capacity never drops
+      # during an update.
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    spec:
+      # 20s for requests to finish + 5s shutdown delay, with margin.
+      terminationGracePeriodSeconds: 30
+      # The service never talks to the Kubernetes API.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # Spread the replicas over nodes, so one node failure does not take
+      # both down.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: redactor
+      containers:
+        - name: redactor
+          image: redactor
+          imagePullPolicy: IfNotPresent
+          args:
+            - --serve
+            - --addr=:8080
+            - --rules=/etc/redactor/rules.yaml
+            # Worst-case memory is about (concurrent requests) x (a few times
+            # the longest line). 16 x 10 MiB lines fits the 1 GiB limit below.
+            - --max-concurrent=16
+            - --shutdown-delay=5s
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Tell the Go garbage collector the container's memory limit, so
+            # it collects harder before the kernel would kill the pod.
+            - name: GOMEMLIMIT
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.memory
+          # Ready = rules loaded and not shutting down. Only ready pods get
+          # traffic from the Service.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 2
+          # Alive = the process still answers HTTP. Failing restarts the pod.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 128Mi
+            # No CPU limit on purpose: a limit throttles the pod even when the
+            # node has idle CPU. The memory limit stays, it protects the node.
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: rules
+              mountPath: /etc/redactor
+              readOnly: true
+      volumes:
+        - name: rules
+          configMap:
+            name: redactor-rules

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: redactor
+spec:
+  # Internal only: log shippers in the cluster call
+  # http://redactor.redactor.svc/redact. Nothing is exposed outside.
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

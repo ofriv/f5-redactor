@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: redactor
+  labels:
+    # Kubernetes rejects any pod in this namespace that does not meet the
+    # "restricted" Pod Security Standard (non-root, no privilege escalation,
+    # all capabilities dropped, seccomp on). Our pod meets it.
+    pod-security.kubernetes.io/enforce: restricted

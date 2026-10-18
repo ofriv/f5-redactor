@@ -1,0 +1,84 @@
+# Redaction rules for API traffic logs.
+version: 1
+
+settings:
+  mask:    { replacement: "****" }
+  partial: { keep_last: 4, fill: "*" }
+  hash:    { algorithm: sha256 }
+
+# key_rules match on the NAME of a JSON key or HTTP header.
+#   scope: headers | body | any
+#   match: either { exact: [names...] } or { regex: "..." }
+#   preserve_scheme (optional): keep a leading auth scheme such as "Bearer"
+#     and redact only the credential after it.
+key_rules:
+  - name: auth-headers
+    scope: headers
+    match:
+      exact: [Authorization, Proxy-Authorization, X-Auth-Token, Cookie, Set-Cookie]
+    action: mask
+    preserve_scheme: true
+
+  - name: api-key-names
+    scope: any
+    match:
+      regex: '(?i)^(x-)?api[_-]?key$'
+    action: hash
+
+  - name: secret-fields
+    scope: body
+    match:
+      regex: '(?i)^(password|passwd|pwd|secret|client_secret|token|access_token|refresh_token|id_token)$'
+    action: mask
+
+  - name: card-number-fields
+    scope: body
+    match:
+      regex: '(?i)^(card_?number|pan)$'
+    action: partial
+
+  - name: cvv-fields
+    scope: body
+    match:
+      regex: '(?i)^(cvv|cvc|cvv2)$'
+    action: remove
+
+  # Personal data. Hashed rather than masked: the same phone number showing
+  # up on many accounts is a fraud signal, and a hash keeps that visible.
+  - name: pii-fields
+    scope: body
+    match:
+      regex: '(?i)^(ssn|social_security_number|phone|phone_number|mobile|dob|date_of_birth|birth_date)$'
+    action: hash
+
+# value_rules match on the CONTENT of any string value, whatever its key is called.
+#   validator (optional): the match only counts if the validator accepts it. Supported: luhn
+value_rules:
+  - name: email
+    pattern: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+    action: hash
+
+  # JWTs are base64url (RFC 7515): "-" and "_", not "+" and "/". Both
+  # alphabets are accepted so that non-standard tokens are caught too.
+  # 2 to 5 segments: a signed JWT has 3, an encrypted one (JWE) has 5.
+  - name: jwt
+    pattern: 'eyJ[A-Za-z0-9_+/=-]+(?:\.[A-Za-z0-9_+/=-]+){1,4}'
+    action: mask
+
+  # 13 to 19 digits, optionally grouped with single spaces or dashes
+  # ("4111 1111 1111 1111", "5555-5555-5555-4444"). Luhn runs on the digits.
+  - name: credit-card
+    pattern: '\b\d(?:[ -]?\d){12,18}\b'
+    validator: luhn
+    action: partial
+
+  - name: api-key-prefix
+    pattern: '\bsk_(?:live|test)_[A-Za-z0-9]+\b'
+    action: mask
+
+  # A secret written as name=value or name: value inside free text, e.g. a
+  # debug log line "login attempt password=hunter2". The whole match is
+  # masked, name included.
+  - name: secret-assignment
+    pattern: '(?i)\b(?:password|passwd|pwd|secret|client_secret|token|access_token|refresh_token|api[_-]?key)\s*[=:]\s*[^\s&,;"]+'
+    action: mask

@@ -1,0 +1,33 @@
+# Apply with:  kubectl apply -k deploy/k8s
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: redactor
+
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - pdb.yaml
+
+# The rules become a ConfigMap whose name ends in a hash of the content
+# (redactor-rules-<hash>). Changing rules.yaml therefore changes the name the
+# Deployment refers to, which starts a rolling update. New pods load the new
+# rules; if the rules are broken, the new pods never become ready, the
+# rollout stops, and the old pods keep serving with the old rules.
+#
+# kustomize only reads files inside this folder, so rules.yaml here is a copy
+# of the one at the repo root. A test checks that the two stay identical.
+configMapGenerator:
+  - name: redactor-rules
+    files:
+      - rules.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: redactor
+    includeSelectors: true
+
+images:
+  - name: redactor
+    newTag: "0.1.0"

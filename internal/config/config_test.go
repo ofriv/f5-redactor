@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
@@ -344,5 +346,21 @@ func TestKeyRuleAppliesTo(t *testing.T) {
 		if got := r.AppliesTo(ScopeBody); got != tt.body {
 			t.Errorf("scope %s: AppliesTo(body) = %v, want %v", tt.scope, got, tt.body)
 		}
+	}
+}
+
+// kustomize only reads files inside deploy/k8s, so the rules deployed to
+// Kubernetes are a copy. The copy must not drift from the repo's rules.
+func TestDeployRulesMatchRepoRules(t *testing.T) {
+	repo, err := os.ReadFile("../../rules.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployed, err := os.ReadFile("../../deploy/k8s/rules.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(repo, deployed) {
+		t.Error("deploy/k8s/rules.yaml differs from rules.yaml; copy rules.yaml over it")
 	}
 }

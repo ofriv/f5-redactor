@@ -1,0 +1,12 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redactor
+spec:
+  # Voluntary disruptions (node drains, cluster upgrades) may only take one
+  # pod at a time, so at least one replica keeps serving.
+  minAvailable: 1
+  # Written out because kustomize does not add labels to PDB selectors.
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redactor
