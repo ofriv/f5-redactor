@@ -28,7 +28,7 @@ key_rules:
   - name: secret-fields
     scope: body
     match:
-      regex: '(?i)^(password|passwd|pwd|secret|client_secret|token)$'
+      regex: '(?i)^(password|passwd|pwd|secret|client_secret|token|access_token|refresh_token|id_token)$'
     action: mask
 
   - name: card-number-fields
@@ -50,8 +50,11 @@ value_rules:
     pattern: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
     action: hash
 
+  # JWTs are base64url (RFC 7515): "-" and "_", not "+" and "/". Both
+  # alphabets are accepted so that non-standard tokens are caught too.
+  # 2 to 5 segments: a signed JWT has 3, an encrypted one (JWE) has 5.
   - name: jwt
-    pattern: 'eyJ[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]*'
+    pattern: 'eyJ[A-Za-z0-9_+/=-]+(?:\.[A-Za-z0-9_+/=-]+){1,4}'
     action: mask
 
   - name: credit-card
