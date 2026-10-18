@@ -1,6 +1,10 @@
 package redact
 
-import "f5-redactor/internal/config"
+import (
+	"regexp"
+
+	"f5-redactor/internal/config"
+)
 
 // Engine applies a validated rule set. It holds no mutable state, so one
 // Engine can be shared by many goroutines.
@@ -8,15 +12,31 @@ type Engine struct {
 	keyRules   []config.KeyRule
 	valueRules []config.ValueRule
 	actions    Actions
+
+	// For value rules with a validator, the pattern anchored at the start
+	// (^...) and at both ends (^...$), indexed like valueRules. Used to look
+	// for a shorter or later match when the validator rejects the first one.
+	anchoredStart []*regexp.Regexp
+	anchoredFull  []*regexp.Regexp
 }
 
 // New builds an Engine from a validated config.
 func New(cfg *config.Config) *Engine {
-	return &Engine{
-		keyRules:   cfg.KeyRules,
-		valueRules: cfg.ValueRules,
-		actions:    NewActions(cfg.Settings),
+	e := &Engine{
+		keyRules:      cfg.KeyRules,
+		valueRules:    cfg.ValueRules,
+		actions:       NewActions(cfg.Settings),
+		anchoredStart: make([]*regexp.Regexp, len(cfg.ValueRules)),
+		anchoredFull:  make([]*regexp.Regexp, len(cfg.ValueRules)),
 	}
+	for i, r := range cfg.ValueRules {
+		if r.Validator != "" {
+			// The pattern already compiled once, so wrapping it cannot fail.
+			e.anchoredStart[i] = regexp.MustCompile(`^(?:` + r.Pattern.String() + `)`)
+			e.anchoredFull[i] = regexp.MustCompile(`^(?:` + r.Pattern.String() + `)$`)
+		}
+	}
+	return e
 }
 
 // RuleNames returns the names of all rules, key rules first, in config order.

@@ -103,8 +103,7 @@ func (e *Engine) redactTextOnce(s string, counts Counts) (string, bool) {
 }
 
 // findMatches returns all validated matches of all value rules in s, except
-// matches that touch a hash produced by an earlier run. Leaving those alone
-// guarantees that a hash is never redacted again, whatever the rules are.
+// matches that touch a hash produced by an earlier run.
 func (e *Engine) findMatches(s string) []match {
 	var matches []match
 	for i := range e.valueRules {
@@ -113,23 +112,84 @@ func (e *Engine) findMatches(s string) []match {
 			if m[0] == m[1] {
 				continue // empty match: nothing to redact
 			}
-			if !validate(r.Validator, s[m[0]:m[1]]) {
+			if validate(r.Validator, s[m[0]:m[1]]) {
+				matches = append(matches, match{start: m[0], end: m[1], rule: i})
 				continue
 			}
-			matches = append(matches, match{start: m[0], end: m[1], rule: i})
+			matches = e.rescueRejected(matches, i, s, m[0], m[1])
 		}
 	}
 
 	if len(matches) > 0 && strings.Contains(s, hashPrefix) {
-		hashes := hashToken.FindAllStringIndex(s, -1)
-		matches = slices.DeleteFunc(matches, func(m match) bool {
-			for _, h := range hashes {
-				if m.start < h[1] && h[0] < m.end {
-					return true
-				}
-			}
-			return false
-		})
+		matches = e.dropHashMatches(matches, s)
 	}
 	return matches
+}
+
+// rescueRejected handles a match that its validator rejected.
+//
+// The regex engine returns the longest match at the leftmost position. For
+// cards that is the longest run of digit groups, and a valid card can hide
+// inside a run that fails Luhn as a whole: in "qty 2 4111 1111 1111 1111"
+// the first match is "2 4111 1111 1111 1111" (17 digits). Dropping it would
+// leak the card. So inside the rejected match we try every word start, and
+// at each one take the longest match that the validator accepts.
+//
+// The candidates may overlap each other (in a long run of digits a random
+// stretch passes Luhn 1 time in 10). That is fine: overlapping matches are
+// merged into one region, so the real card is always covered. The cost is
+// that a few harmless digits next to it may be masked too.
+func (e *Engine) rescueRejected(matches []match, rule int, s string, start, end int) []match {
+	r := &e.valueRules[rule]
+	for p := start; p < end; p = nextWordStart(s, p) {
+		// Matching on s[p:] treats p as the start of the text. That gives
+		// the same \b result as in s only because p is at a word start.
+		loc := e.anchoredStart[rule].FindStringIndex(s[p:])
+		if loc == nil {
+			continue
+		}
+		for q := p + loc[1]; q > p; q-- {
+			// Cut only before a non-word character, so a \b at the end of
+			// the pattern gives the same result as in s.
+			if q < len(s) && isWordByte(s[q]) {
+				continue
+			}
+			if e.anchoredFull[rule].MatchString(s[p:q]) && validate(r.Validator, s[p:q]) {
+				matches = append(matches, match{start: p, end: q, rule: rule})
+				break
+			}
+		}
+	}
+	return matches
+}
+
+// nextWordStart returns the next index after p that starts a word (preceded
+// by a non-word byte), or len(s).
+func nextWordStart(s string, p int) int {
+	for p++; p < len(s); p++ {
+		if !isWordByte(s[p-1]) {
+			return p
+		}
+	}
+	return len(s)
+}
+
+// isWordByte matches the regexp \b definition of a word character (ASCII).
+func isWordByte(c byte) bool {
+	return c == '_' || '0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
+}
+
+// dropHashMatches removes matches that touch a hash produced by an earlier
+// run. Leaving those alone guarantees that a hash is never redacted again,
+// whatever the rules are.
+func (e *Engine) dropHashMatches(matches []match, s string) []match {
+	hashes := hashToken.FindAllStringIndex(s, -1)
+	return slices.DeleteFunc(matches, func(m match) bool {
+		for _, h := range hashes {
+			if m.start < h[1] && h[0] < m.end {
+				return true
+			}
+		}
+		return false
+	})
 }

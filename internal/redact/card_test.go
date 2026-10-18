@@ -1,6 +1,9 @@
 package redact
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Regression tests for card numbers written with spaces or dashes. The
 // provided pattern \b\d{13,19}\b only matches unbroken digits, so the cards
@@ -36,5 +39,42 @@ func TestCardNumbersWithSeparators(t *testing.T) {
 				t.Errorf("RedactText(%q)\n got %q\nwant %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+// The pattern matches the longest run of digit groups. When that run fails
+// Luhn as a whole, a valid card inside it must still be found. A random
+// stretch of digits next to the card can pass Luhn by chance and overlap it;
+// the merged region is then masked together, so a few harmless digits may be
+// masked too. What must hold: no more than the card's last 4 digits remain,
+// and the words around the run are untouched.
+func TestCardInsideLongerDigitRun(t *testing.T) {
+	e := shippedEngine(t)
+	tests := []struct {
+		in, keepPrefix, keepSuffix string
+	}{
+		{"qty 2 4111 1111 1111 1111", "qty ", ""},
+		{"4111 1111 1111 1111 2 left", "", " left"},
+		{"1234 4111 1111 1111 1111", "", ""},
+		{"1 2 3 4 5 6 7 4111 1111 1111 1111", "1 2 ", ""},
+		{"ref 9 9 5555-5555-5555-4444 ok", "ref ", " ok"},
+	}
+	for _, tt := range tests {
+		got := e.RedactText(tt.in, nil)
+		digits := strings.Map(func(r rune) rune {
+			if r >= '0' && r <= '9' {
+				return r
+			}
+			return -1
+		}, got)
+		// The card's first 12 digits are never all visible; at most 4 of
+		// the card remain, plus a few digits of the run outside it.
+		if strings.Contains(digits, "411111111111") || strings.Contains(digits, "555555555555") ||
+			strings.Contains(got, "4111 1111") || strings.Contains(got, "5555-5555") {
+			t.Errorf("card not covered: %q -> %q", tt.in, got)
+		}
+		if !strings.HasPrefix(got, tt.keepPrefix) || !strings.HasSuffix(got, tt.keepSuffix) {
+			t.Errorf("text around the run changed: %q -> %q", tt.in, got)
+		}
 	}
 }
