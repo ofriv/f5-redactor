@@ -57,7 +57,7 @@ is never passed through unredacted.
 **Tests**
 
 ```bash
-go test ./...            # 417 tests; -short skips the 64 MiB memory test
+go test ./...            # 418 tests; -short skips the 64 MiB memory test
 go test -race ./...
 go test ./internal/redact -run '^$' -fuzz FuzzRedactLine -fuzztime 60s
 go test ./internal/stream -run '^$' -bench . -benchtime 5s
@@ -68,7 +68,7 @@ The tests that matter most:
 - `TestNoSecretLeaks`: every secret in `input.ndjson` (68 values) is
   absent from stdout and stderr. `TestNoLeaksInHardCases` does the same
   for cases found in the reviews (see "How I worked").
-- `TestGeneratedLeakCorpus`: 1,802 generated lines hide secrets in every
+- `TestGeneratedLeakCorpus`: 1,819 generated lines hide secrets in every
   combination of field-name spelling (58, from `password` to
   `AWS_SECRET_ACCESS_KEY`),
   place (JSON at any depth, JSON inside strings up to 5 levels, forms, query
@@ -130,6 +130,8 @@ that cannot be parsed becomes an error record.
   field outside the headers, including unexpected top-level fields like
   `"user"`, gets the body rules. A line that is valid JSON but not an object
   (`42`, an array) gets every rule, since its structure is unknown.
+  Headers may also be a list of `{"name": ..., "value": ...}` objects, as in
+  HAR files; the header rule for the name then applies to the value.
 - **Key rules**: first matching rule in file order wins. Exact names match
   case-insensitively (header names are case-insensitive). Under a matching
   key: `null` and `""` stay (nothing to hide, and an empty password is itself
@@ -338,6 +340,13 @@ The pods wait for the Secret and start once it exists.
 - **Neighbouring digits are over-masked:** a card inside a run of digit
   groups masks the whole run, so two cards separated only by a space keep
   only the last 4 digits of the second.
+- **Tokens in standard base64** (`+` or `/`, which real JWTs never use, RFC
+  7515) are matched only up to the first such character, and not at all if
+  it falls in the first segment. The cost of keeping `/` out (section 3).
+  Under a secret field name or header they are still hidden by the key
+  rules.
+- **Over-masking of header names:** any header containing `auth` is masked,
+  so `:authority` (the HTTP/2 host) and `X-Author` lose their value too.
 - **Not decoded:** base64 or compressed bodies, cards written with dots or
   with non-ASCII digits.
   Personal data is found by field name only (no phone numbers in free text,

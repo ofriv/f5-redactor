@@ -173,6 +173,8 @@ func (g *corpus) headerSecrets() {
 		s := fmt.Sprintf("hv%dzq", g.next())
 		g.add("header "+h.name, js(map[string]any{"headers": map[string]any{h.name: fmt.Sprintf(h.format, s)}}), s)
 		s = fmt.Sprintf("hv%dzq", g.next())
+		g.add("header list (HAR) "+h.name, js(map[string]any{"headers": []any{map[string]any{"name": h.name, "value": fmt.Sprintf(h.format, s)}}}), s)
+		s = fmt.Sprintf("hv%dzq", g.next())
 		g.add("response header "+h.name, js(map[string]any{"response": map[string]any{"headers": map[string]any{h.name: []any{fmt.Sprintf(h.format, s)}}}}), s)
 	}
 	// Secrets in URLs inside header values.

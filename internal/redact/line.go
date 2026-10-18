@@ -73,6 +73,10 @@ func (e *Engine) redactObject(obj *node, w walk, counts Counts) {
 	if w.where == scopeTop {
 		contentType = contentTypeOf(obj)
 	}
+	var pairRule *config.KeyRule
+	if w.where == config.ScopeHeaders {
+		pairRule = e.headerPairRule(obj)
+	}
 
 	kept := obj.members[:0]
 	for _, m := range obj.members {
@@ -105,6 +109,9 @@ func (e *Engine) redactObject(obj *node, w walk, counts Counts) {
 			field.where = config.ScopeBody // any other top-level field
 		}
 		rule := e.keyRuleFor(m.key, field.where)
+		if rule == nil && pairRule != nil && strings.EqualFold(m.key, "value") {
+			rule = pairRule
+		}
 		switch {
 		case rule == nil:
 			e.redactNode(m.value, field, counts)
@@ -120,6 +127,20 @@ func (e *Engine) redactObject(obj *node, w walk, counts Counts) {
 		kept = append(kept, m)
 	}
 	obj.members = kept
+}
+
+// headerPairRule handles headers sent as a list of {"name": ..., "value": ...}
+// objects (HAR files and many proxies log them this way). It returns the
+// header rule for the name, which then applies to the value, or nil.
+func (e *Engine) headerPairRule(obj *node) *config.KeyRule {
+	for _, m := range obj.members {
+		if strings.EqualFold(m.key, "name") && m.value.kind == kindString {
+			if rule := e.keyRuleFor(m.value.text, config.ScopeHeaders); rule != nil {
+				return rule
+			}
+		}
+	}
+	return nil
 }
 
 // keyRuleFor returns the first key rule that covers key in this scope, or nil.

@@ -178,6 +178,14 @@ func TestRedactLine(t *testing.T) {
 			counts: Counts{"http-header-dump": 1},
 		},
 		{
+			// HAR files and many proxies log headers as a list of
+			// name/value objects; the header rule for the name applies.
+			name:   "headers as a list of name/value objects",
+			in:     `{"headers":[{"name":"Authorization","value":"Basic dXNlcjpwYXNz"},{"name":"Cookie","value":"sid=abc123"},{"name":"Accept","value":"*/*"}],"response":{"headers":[{"name":"set-cookie","value":"sid=def456"}]}}`,
+			want:   `{"headers":[{"name":"Authorization","value":"Basic ****"},{"name":"Cookie","value":"****"},{"name":"Accept","value":"*/*"}],"response":{"headers":[{"name":"set-cookie","value":"****"}]}}`,
+			counts: Counts{"auth-headers": 3},
+		},
+		{
 			// The email rule (hash, listed first) also matches
 			// "s3cret@db.internal". Hashing it would publish a plain SHA-256
 			// of the password, which can be reversed by guessing.
