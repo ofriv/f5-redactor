@@ -41,8 +41,11 @@ func TestProcessLineEndings(t *testing.T) {
 		{"no newline at the end", "{\"a\":1}\n{\"b\":2}", "{\"a\":1}\n{\"b\":2}\n"},
 		{"byte order mark", "\xEF\xBB\xBF{\"a\":1}\n", "{\"a\":1}\n"},
 		{"empty input", "", ""},
-		{"only newlines", "\n\n\n", ""},
-		{"whitespace lines", "  \n\t\n{\"a\":1}\n", "{\"a\":1}\n"},
+		// Empty and whitespace-only lines are kept, one output line per
+		// input line.
+		{"only newlines", "\n\n\n", "\n\n\n"},
+		{"whitespace lines", "  \n\t\n{\"a\":1}\n", "  \n\t\n{\"a\":1}\n"},
+		{"empty line with windows ending", "{}\r\n\r\n{}\r\n", "{}\n\n{}\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -67,6 +70,7 @@ func TestProcessRejectedLines(t *testing.T) {
 	got, stats := process(t, in, Options{Warnings: &warnings})
 
 	want := `{"body":{"email":"` + redact.Hash("a@b.com") + `"}}` + "\n" +
+		"\n" +
 		`{"_redactor":{"error":"invalid_json","line":3}}` + "\n" +
 		`{"_redactor":{"error":"invalid_json","line":4}}` + "\n" +
 		`42` + "\n"
@@ -74,7 +78,7 @@ func TestProcessRejectedLines(t *testing.T) {
 		t.Errorf("output\n got %q\nwant %q", got, want)
 	}
 
-	if stats.LinesRead != 5 || stats.LinesWritten != 4 || stats.Empty != 1 ||
+	if stats.LinesRead != 5 || stats.LinesWritten != 5 || stats.Empty != 1 ||
 		stats.Rejected["invalid_json"] != 2 || stats.Notices[redact.NoticeNotObject] != 1 ||
 		stats.Redactions["email"] != 1 {
 		t.Errorf("stats = %+v", stats)
@@ -183,8 +187,8 @@ func TestProcessAfterLine(t *testing.T) {
 	_, err := Process(strings.NewReader("{}\n{}\n\n"), io.Discard, testEngine(t), Options{
 		AfterLine: func() error { calls++; return nil },
 	})
-	if err != nil || calls != 2 {
-		t.Errorf("err = %v, calls = %d, want nil and 2", err, calls)
+	if err != nil || calls != 3 {
+		t.Errorf("err = %v, calls = %d, want nil and 3", err, calls)
 	}
 
 	_, err = Process(strings.NewReader("{}\n"), io.Discard, testEngine(t), Options{
@@ -206,7 +210,7 @@ func TestSummaryText(t *testing.T) {
 	if err := stats.WriteText(&buf, []string{"auth-headers", "email"}); err != nil {
 		t.Fatal(err)
 	}
-	want := `redactor: 5 lines read, 4 written, 2 rejected, 1 empty skipped
+	want := `redactor: 5 lines read, 4 written, 2 rejected, 1 empty
 redactions by rule:
   auth-headers           0
   email                  3
@@ -229,7 +233,7 @@ func TestSummaryJSON(t *testing.T) {
 	if err := stats.WriteJSON(&buf, []string{"auth-headers", "email"}); err != nil {
 		t.Fatal(err)
 	}
-	want := `{"lines_read":2,"lines_written":2,"empty_skipped":0,"rejected":{},"notices":{},"redactions":{"auth-headers":0,"email":3}}` + "\n"
+	want := `{"lines_read":2,"lines_written":2,"empty_lines":0,"rejected":{},"notices":{},"redactions":{"auth-headers":0,"email":3}}` + "\n"
 	if buf.String() != want {
 		t.Errorf("got  %s\nwant %s", buf.String(), want)
 	}

@@ -15,7 +15,7 @@ import (
 type Stats struct {
 	LinesRead    int            `json:"lines_read"`
 	LinesWritten int            `json:"lines_written"`
-	Empty        int            `json:"empty_skipped"`
+	Empty        int            `json:"empty_lines"`
 	Rejected     map[string]int `json:"rejected"`   // reason -> lines
 	Notices      map[string]int `json:"notices"`    // notice -> lines
 	Redactions   redact.Counts  `json:"redactions"` // rule name -> redactions
@@ -43,7 +43,7 @@ func (s *Stats) RejectedTotal() int {
 // name in config order, so rules that matched nothing are shown with 0.
 func (s *Stats) WriteText(w io.Writer, rules []string) error {
 	p := &printer{w: w}
-	p.printf("redactor: %d lines read, %d written, %d rejected, %d empty skipped\n",
+	p.printf("redactor: %d lines read, %d written, %d rejected, %d empty\n",
 		s.LinesRead, s.LinesWritten, s.RejectedTotal(), s.Empty)
 
 	p.printf("redactions by rule:\n")

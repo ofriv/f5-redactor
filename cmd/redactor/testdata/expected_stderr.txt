@@ -3,7 +3,7 @@ redactor: line 21: invalid_json
 redactor: line 23: not_an_object (redacted)
 redactor: line 24: not_an_object (redacted)
 redactor: line 50: invalid_json
-redactor: 50 lines read, 48 written, 3 rejected, 2 empty skipped
+redactor: 50 lines read, 50 written, 3 rejected, 2 empty
 redactions by rule:
   auth-headers           8
   api-key-names          8

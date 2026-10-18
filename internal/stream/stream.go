@@ -52,7 +52,8 @@ type Options struct {
 //
 // For each input line:
 //   - a valid line is written redacted;
-//   - an empty (or whitespace-only) line is skipped and counted;
+//   - an empty (or whitespace-only) line is written back as it is, so the
+//     output has exactly one line per input line;
 //   - a line that cannot be parsed, or is too long, is replaced by an error
 //     record that contains no input data, only the reason and line number:
 //     {"_redactor":{"error":"invalid_json","line":20}}
@@ -104,8 +105,10 @@ func Process(r io.Reader, w io.Writer, eng *redact.Engine, opts Options) (*Stats
 			redacted, notice, err := eng.RedactLine(line, stats.Redactions)
 			switch {
 			case errors.Is(err, redact.ErrEmpty):
+				// Nothing to hide: written back as it came, so output line N
+				// is always input line N.
 				stats.Empty++
-				continue
+				out = append(out, line...)
 			case err != nil:
 				stats.reject(err)
 				warn(lineNo, err.Error())

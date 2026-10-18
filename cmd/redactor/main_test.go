@@ -25,8 +25,8 @@ func TestCLISampleInput(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n")
-	if len(lines) != 48 { // 50 lines, 2 of them empty
-		t.Errorf("got %d output lines, want 48", len(lines))
+	if len(lines) != 50 { // one output line per input line, empty ones too
+		t.Errorf("got %d output lines, want 50", len(lines))
 	}
 	for _, want := range []string{
 		`{"_redactor":{"error":"invalid_json","line":20}}`,
@@ -39,7 +39,7 @@ func TestCLISampleInput(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"redactor: 50 lines read, 48 written, 3 rejected, 2 empty skipped",
+		"redactor: 50 lines read, 50 written, 3 rejected, 2 empty",
 		"redactor: line 20: invalid_json",
 		"redactor: line 23: not_an_object (redacted)",
 		"  email ",
