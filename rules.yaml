@@ -40,13 +40,16 @@ key_rules:
   # db_password, access_token, csrfToken, secretAccessKey, sessionId,
   # authorization, cookie, ... Matching the end keeps look-alikes out:
   # password_hint, passwordless, tokenizer, token_type and secret_santa do
-  # not end with a secret word. ("session" alone is left out here, so a
-  # whole session object with harmless fields is not masked; the text rules
-  # below do include it.)
+  # not end with a secret word. Plurals count too (passwords, api_keys),
+  # except that "tokens" counts only alone or after a credential word
+  # (access_tokens), so token counts such as max_tokens and prompt_tokens in
+  # LLM API logs stay. ("session" alone is left out here, so a whole session
+  # object with harmless fields is not masked; the text rules below do
+  # include it.)
   - name: secret-fields
     scope: body
     match:
-      regex: '(?i)(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth)$'
+      regex: '(?i)(?:(?:password|passwd|pwd|passphrase|secret|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth)s?|token|(?:^|access|refresh|id|auth|api|bearer|session|csrf|xsrf)[_-]?tokens)$'
     action: mask
 
   - name: card-number-fields
@@ -147,7 +150,7 @@ value_rules:
   # (password: "my pass"); the quotes stay. An auth scheme before the value
   # is kept: "token: Bearer abc" becomes "token: Bearer ****".
   - name: secret-assignment
-    pattern: '(?i)\b[\w-]*?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth|session)\s*[=:]\s*(?:(?:Bearer|Basic|Token)\s+)?(?:"([^"]*)"|''([^'']*)''|([^\s&,;"''<]+))'
+    pattern: '(?i)\b[\w-]*?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth|session)s?\s*[=:]\s*(?:(?:Bearer|Basic|Token)\s+)?(?:"([^"]*)"|''([^'']*)''|([^\s&,;"''<]+))'
     group: 1
     action: mask
 
@@ -155,13 +158,13 @@ value_rules:
   # too deep in strings to be parsed, where the quotes are escaped
   # (\"password\").
   - name: json-secret
-    pattern: '(?i)\\*"[\w-]*?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth|session)\\*"\s*:\s*(?:\\*"([^"\\]*)|(-?\d[\d.eE+-]*|true|false))'
+    pattern: '(?i)\\*"[\w-]*?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth|session)s?\\*"\s*:\s*(?:\\*"([^"\\]*)|(-?\d[\d.eE+-]*|true|false))'
     group: 1
     action: mask
 
   # <password>value</password> in an XML body.
   - name: xml-secret
-    pattern: '(?i)<(?:[\w.-]+:)?[\w-]*?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth|session)(?:\s[^>]*)?>([^<]+)<'
+    pattern: '(?i)<(?:[\w.-]+:)?[\w-]*?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth|session)s?(?:\s[^>]*)?>([^<]+)<'
     group: 1
     action: mask
 
@@ -170,6 +173,6 @@ value_rules:
   #   (blank line)
   #   hunter2
   - name: multipart-secret
-    pattern: '(?i)name="[\w-]*?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth|session)"[^\r\n]*(?:\r?\n[^\r\n]+)*\r?\n\r?\n([^\r\n]+)'
+    pattern: '(?i)name="[\w-]*?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credentials?|session[_-]?id|authorization|cookie|auth|session)s?"[^\r\n]*(?:\r?\n[^\r\n]+)*\r?\n\r?\n([^\r\n]+)'
     group: 1
     action: mask

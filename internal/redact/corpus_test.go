@@ -90,6 +90,8 @@ var secretNames = []string{
 	"newPassword", "currentPassword", "db_password", "user_password", "secret_key",
 	"secretAccessKey", "AWS_SECRET_ACCESS_KEY", "sessionId", "session_id", "apiToken",
 	"api_token", "csrf_token", "webhook_secret", "credentials", "authorization", "cookie", "auth",
+	// Plurals, found by the second round of reviews.
+	"passwords", "secrets", "api_keys", "tokens", "access_tokens", "cookies",
 }
 
 // namedSecrets: a secret that only its field name identifies.

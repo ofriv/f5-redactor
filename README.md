@@ -57,7 +57,7 @@ is never passed through unredacted.
 **Tests**
 
 ```bash
-go test ./...            # 415 tests; -short skips the 64 MiB memory test
+go test ./...            # 417 tests; -short skips the 64 MiB memory test
 go test -race ./...
 go test ./internal/redact -run '^$' -fuzz FuzzRedactLine -fuzztime 60s
 go test ./internal/stream -run '^$' -bench . -benchtime 5s
@@ -68,8 +68,8 @@ The tests that matter most:
 - `TestNoSecretLeaks`: every secret in `input.ndjson` (68 values) is
   absent from stdout and stderr. `TestNoLeaksInHardCases` does the same
   for cases found in the reviews (see "How I worked").
-- `TestGeneratedLeakCorpus`: 1,658 generated lines hide secrets in every
-  combination of field-name spelling (52, from `password` to
+- `TestGeneratedLeakCorpus`: 1,802 generated lines hide secrets in every
+  combination of field-name spelling (58, from `password` to
   `AWS_SECRET_ACCESS_KEY`),
   place (JSON at any depth, JSON inside strings up to 5 levels, forms, query
   strings, URLs, XML, multipart, free text, headers) and value shape (cards,
@@ -226,7 +226,9 @@ Rules added or changed:
 
 - `secret-fields` matches any name that ends in a secret word, in any
   spelling: `password`, `newPassword`, `db_password`, `accessToken`,
-  `access-token`, `AWS_SECRET_ACCESS_KEY`, `sessionId`, `credentials`, ...;
+  `access-token`, `AWS_SECRET_ACCESS_KEY`, `sessionId`, `credentials`,
+  plurals (`passwords`, `api_keys`), ...; `tokens` only alone or after a
+  credential word (`access_tokens`), so counts like `max_tokens` stay;
   names are matched with surrounding spaces ignored.
 - `credential-headers`: any header whose name contains auth, cookie, token,
   secret, session, password, pwd, passphrase, credential, signature, csrf,
