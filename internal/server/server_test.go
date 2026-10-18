@@ -3,13 +3,17 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -305,5 +309,68 @@ func TestSlowSteadyStreamIsNotCutOff(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if got := strings.Count(string(body), `{"body":{"token":"****"}}`); got != 6 {
 		t.Errorf("got %d of 6 lines: %q", got, body)
+	}
+}
+
+// Many clients at once, some hanging up halfway: every complete response
+// must equal the expected output, and nothing may be left running after.
+func TestManyConcurrentClients(t *testing.T) {
+	_, ts := newTestServer(t, Options{MaxConcurrent: 64})
+	input, err := os.ReadFile("../../input.ndjson")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("../../cmd/redactor/testdata/expected_output.ndjson")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := runtime.NumGoroutine()
+
+	const clients = 60
+	var wg sync.WaitGroup
+	errs := make(chan error, clients)
+	for i := range clients {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/redact", bytes.NewReader(input))
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer resp.Body.Close()
+			if i%5 == 0 { // every fifth client hangs up after a few bytes
+				buf := make([]byte, 64)
+				_, _ = resp.Body.Read(buf)
+				cancel()
+				return
+			}
+			got, err := io.ReadAll(resp.Body)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if !bytes.Equal(got, want) {
+				errs <- fmt.Errorf("client %d: response differs from the expected output", i)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+
+	// Handlers of the clients that hung up must finish too.
+	http.DefaultClient.CloseIdleConnections()
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > before+5 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if n := runtime.NumGoroutine(); n > before+5 {
+		t.Errorf("%d goroutines left running (started with %d)", n, before)
 	}
 }
