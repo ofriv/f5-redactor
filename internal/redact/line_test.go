@@ -30,10 +30,12 @@ func TestRedactLine(t *testing.T) {
 		counts Counts
 	}{
 		{
+			// A body field named Authorization is not a header; a header
+			// named password is caught by the header rule credential-headers.
 			name:   "header rules apply to headers only",
 			in:     `{"headers":{"Authorization":"Bearer abc","X-Api-Key":"k","Content-Type":"application/json","password":"p"},"body":{"password":"p","Authorization":"x"}}`,
-			want:   `{"headers":{"Authorization":"Bearer ****","X-Api-Key":"` + h("k") + `","Content-Type":"application/json","password":"p"},"body":{"password":"****","Authorization":"x"}}`,
-			counts: Counts{"auth-headers": 1, "api-key-names": 1, "secret-fields": 1},
+			want:   `{"headers":{"Authorization":"Bearer ****","X-Api-Key":"` + h("k") + `","Content-Type":"application/json","password":"****"},"body":{"password":"****","Authorization":"x"}}`,
+			counts: Counts{"auth-headers": 1, "api-key-names": 1, "credential-headers": 1, "secret-fields": 1},
 		},
 		{
 			name:   "header names in any case (lines 2 and 14)",
@@ -249,7 +251,9 @@ func TestRedactLineNotAnObjectUsesAllRules(t *testing.T) {
 	if string(out) != want {
 		t.Errorf("got  %s\nwant %s", out, want)
 	}
-	if !maps.Equal(counts, Counts{"auth-headers": 2, "secret-fields": 1}) {
+	// credential-headers comes before secret-fields in rules.yaml, so it is
+	// the rule that catches "password" here.
+	if !maps.Equal(counts, Counts{"auth-headers": 2, "credential-headers": 1}) {
 		t.Errorf("counts = %v", counts)
 	}
 }

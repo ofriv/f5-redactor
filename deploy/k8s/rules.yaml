@@ -19,16 +19,28 @@ key_rules:
     action: mask
     preserve_scheme: true
 
+  # Any other header whose name says it carries a credential: X-Access-Token,
+  # X-CSRF-Token, X-Amz-Security-Token, X-Session-Id, ... A name that only
+  # looks like one costs little; a missed credential leaks.
+  - name: credential-headers
+    scope: headers
+    match:
+      regex: '(?i)(token|secret|session|password|credential|signature)'
+    action: mask
+
   - name: api-key-names
     scope: any
     match:
       regex: '(?i)^(x-)?api[_-]?key$'
     action: hash
 
+  # [_-]? accepts snake_case, kebab-case and camelCase: access_token,
+  # access-token and accessToken. The ^...$ anchors keep look-alikes such as
+  # password_hint and tokenizer out.
   - name: secret-fields
     scope: body
     match:
-      regex: '(?i)^(password|passwd|pwd|secret|client_secret|token|access_token|refresh_token|id_token)$'
+      regex: '(?i)^(password|passwd|pwd|passphrase|secret|client[_-]?secret|api[_-]?secret|private[_-]?key|token|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|session[_-]?token|bearer[_-]?token)$'
     action: mask
 
   - name: card-number-fields
@@ -80,5 +92,5 @@ value_rules:
   # debug log line "login attempt password=hunter2". The whole match is
   # masked, name included.
   - name: secret-assignment
-    pattern: '(?i)\b(?:password|passwd|pwd|secret|client_secret|token|access_token|refresh_token|api[_-]?key)\s*[=:]\s*[^\s&,;"]+'
+    pattern: '(?i)\b(?:password|passwd|pwd|secret|client[_-]?secret|api[_-]?secret|token|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|session(?:[_-]?(?:id|token))?|api[_-]?key)\s*[=:]\s*[^\s&,;"]+'
     action: mask

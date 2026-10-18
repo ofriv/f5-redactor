@@ -26,6 +26,7 @@ func TestLoadShippedRules(t *testing.T) {
 		action Action
 	}{
 		{"auth-headers", ScopeHeaders, ActionMask},
+		{"credential-headers", ScopeHeaders, ActionMask},
 		{"api-key-names", ScopeAny, ActionHash},
 		{"secret-fields", ScopeBody, ActionMask},
 		{"card-number-fields", ScopeBody, ActionPartial},
