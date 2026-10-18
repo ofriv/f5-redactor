@@ -1,0 +1,22 @@
+redactor: line 20: invalid_json
+redactor: line 21: invalid_json
+redactor: line 23: not_an_object (redacted)
+redactor: line 24: not_an_object (redacted)
+redactor: line 50: invalid_json
+redactor: 50 lines read, 48 written, 3 rejected, 2 empty skipped
+redactions by rule:
+  auth-headers           8
+  api-key-names          8
+  secret-fields          13
+  card-number-fields     5
+  cvv-fields             1
+  pii-fields             3
+  email                  31
+  jwt                    2
+  credit-card            17
+  api-key-prefix         2
+  secret-assignment      1
+rejected lines by reason:
+  invalid_json           3
+notices:
+  not_an_object          2
