@@ -145,7 +145,11 @@ func (s *Server) handleRedact(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Trailer", summaryTrailer)
-	w.WriteHeader(http.StatusOK)
+	// No WriteHeader here: the status line goes out with the first output.
+	// A client that sends "Expect: 100-continue" (curl does for bodies over
+	// 1 MiB) waits for "100 Continue" before sending the body, and Go sends
+	// that on the first read of the body, but only if the response has not
+	// started. Writing 200 first would make such a client skip its body.
 
 	out := bufio.NewWriterSize(w, 32<<10)
 	flush := func() error {

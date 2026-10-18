@@ -374,3 +374,40 @@ func TestManyConcurrentClients(t *testing.T) {
 		t.Errorf("%d goroutines left running (started with %d)", n, before)
 	}
 }
+
+// curl sends "Expect: 100-continue" for bodies over 1 MiB and sends the body
+// only after the server answers "100 Continue". The whole input must still
+// be redacted.
+func TestRedactWithExpectContinue(t *testing.T) {
+	_, ts := newTestServer(t, Options{})
+	input, err := os.ReadFile("../../input.ndjson")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("../../cmd/redactor/testdata/expected_output.ndjson")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/redact", bytes.NewReader(input))
+	req.Header.Set("Expect", "100-continue")
+	client := &http.Client{Transport: &http.Transport{ExpectContinueTimeout: 5 * time.Second}}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	got, _ := io.ReadAll(resp.Body)
+	if !bytes.Equal(got, want) {
+		t.Errorf("with Expect: 100-continue got %d bytes, want %d", len(got), len(want))
+	}
+}
+
+// An empty request body still gets a valid, empty response with a summary.
+func TestRedactEmptyBody(t *testing.T) {
+	_, ts := newTestServer(t, Options{})
+	resp := post(t, ts.URL, "")
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || len(body) != 0 || resp.Trailer.Get(summaryTrailer) == "" {
+		t.Errorf("status %d, body %q, summary %q", resp.StatusCode, body, resp.Trailer.Get(summaryTrailer))
+	}
+}
