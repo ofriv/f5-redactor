@@ -139,6 +139,9 @@ func (e *Engine) findMatches(s string) []match {
 			}
 			found = e.rescueRejected(found, i, s, m[0], m[1])
 		}
+		if r.Validator == config.ValidatorLuhn && len(found) > 0 {
+			found = expandDigitRuns(s, found)
+		}
 		matches = append(matches, found...)
 	}
 
@@ -146,6 +149,56 @@ func (e *Engine) findMatches(s string) []match {
 		matches = e.dropHashMatches(matches, s)
 	}
 	return matches
+}
+
+// expandDigitRuns grows each card match to the whole run of digit groups it
+// sits in ("1 2 4111 1111 1111 1111 3": the whole run).
+//
+// Without this, a long run is redacted as several cards. "partial" keeps
+// the last 4 digits of each, and those 4 digits plus the next group can
+// form a new 13-digit run that passes Luhn (all zeros do). Every run of the
+// tool would then find one more card: the output would never settle, and
+// with enough groups it would not be idempotent. Found by FuzzRedactText.
+//
+// The cost: two cards with only a space between them are redacted as one
+// region, and only the last 4 digits of the second one stay.
+//
+// The run does not grow into a hash from an earlier run (its hex can end in
+// a digit): touching a hash drops the match, which would leak the card.
+func expandDigitRuns(s string, found []match) []match {
+	var hashes [][]int
+	if strings.Contains(s, hashPrefix) {
+		hashes = hashToken.FindAllStringIndex(s, -1)
+	}
+	inHash := func(i int) bool {
+		for _, h := range hashes {
+			if h[0] <= i && i < h[1] {
+				return true
+			}
+		}
+		return false
+	}
+	isDigit := func(i int) bool { return i >= 0 && i < len(s) && s[i] >= '0' && s[i] <= '9' && !inHash(i) }
+	isSep := func(i int) bool { return i >= 0 && i < len(s) && (s[i] == ' ' || s[i] == '-') }
+
+	slices.SortFunc(found, func(a, b match) int { return cmp.Compare(a.start, b.start) })
+	out := found[:0]
+	runEnd := -1
+	for _, m := range found {
+		if m.start < runEnd {
+			continue // inside the run already added
+		}
+		start, end := m.start, m.end
+		for isDigit(start-1) || (isSep(start-1) && isDigit(start-2)) {
+			start--
+		}
+		for isDigit(end) || (isSep(end) && isDigit(end+1)) {
+			end++
+		}
+		out = append(out, match{start: start, end: end, rule: m.rule})
+		runEnd = end
+	}
+	return out
 }
 
 // rescueRejected handles a match that its validator rejected.

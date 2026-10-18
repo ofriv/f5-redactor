@@ -22,7 +22,10 @@ func TestCardNumbersWithSeparators(t *testing.T) {
 		{"no separators still works", "first 4111111111111111 then", "first ************1111 then"},
 		{"mixed separators", "4111-1111 1111-1111", "***************1111"},
 
-		{"two cards in a row", "4111111111111111 5555555555554444", "************1111 ************4444"},
+		// One run of digit groups is one region (see expandDigitRuns): only
+		// the last 4 digits of the run stay.
+		{"two cards in a row", "4111111111111111 5555555555554444", "*****************************4444"},
+		{"two cards apart", "4111111111111111 and 5555555555554444", "************1111 and ************4444"},
 
 		// Must not be redacted.
 		{"fails Luhn with spaces", "ref 4111 1111 1111 1112", "ref 4111 1111 1111 1112"},
@@ -43,11 +46,10 @@ func TestCardNumbersWithSeparators(t *testing.T) {
 }
 
 // The pattern matches the longest run of digit groups. When that run fails
-// Luhn as a whole, a valid card inside it must still be found. A random
-// stretch of digits next to the card can pass Luhn by chance and overlap it;
-// the merged region is then masked together, so a few harmless digits may be
-// masked too. What must hold: no more than the card's last 4 digits remain,
-// and the words around the run are untouched.
+// Luhn as a whole, a valid card inside it must still be found, and then the
+// whole run of digit groups is redacted (see expandDigitRuns). What must
+// hold: no more than 4 digits of the card remain, and the words around the
+// run are untouched.
 func TestCardInsideLongerDigitRun(t *testing.T) {
 	e := shippedEngine(t)
 	tests := []struct {
@@ -56,7 +58,7 @@ func TestCardInsideLongerDigitRun(t *testing.T) {
 		{"qty 2 4111 1111 1111 1111", "qty ", ""},
 		{"4111 1111 1111 1111 2 left", "", " left"},
 		{"1234 4111 1111 1111 1111", "", ""},
-		{"1 2 3 4 5 6 7 4111 1111 1111 1111", "1 2 ", ""},
+		{"1 2 3 4 5 6 7 4111 1111 1111 1111", "", ""},
 		{"ref 9 9 5555-5555-5555-4444 ok", "ref ", " ok"},
 	}
 	for _, tt := range tests {
@@ -76,5 +78,40 @@ func TestCardInsideLongerDigitRun(t *testing.T) {
 		if !strings.HasPrefix(got, tt.keepPrefix) || !strings.HasSuffix(got, tt.keepSuffix) {
 			t.Errorf("text around the run changed: %q -> %q", tt.in, got)
 		}
+	}
+}
+
+// A long run of digit groups must be stable after one run (FuzzRedactText
+// found this with all zeros, which pass Luhn).
+func TestLongDigitRunIsIdempotent(t *testing.T) {
+	e := shippedEngine(t)
+	for _, in := range []string{
+		"0000000000000 00000000000 000000000 00000000000 000000000 00000000000 000000000 00000000000 000000000",
+		strings.Repeat("4111 1111 1111 1111 ", 50),
+		"x " + strings.Repeat("0000-", 200) + "0 y",
+	} {
+		once := e.RedactText(in, nil)
+		if twice := e.RedactText(once, nil); twice != once {
+			t.Errorf("not idempotent:\n once %q\ntwice %q", once, twice)
+		}
+		if strings.Count(once, "0000")+strings.Count(once, "1111") > 1 {
+			t.Errorf("more than the last 4 digits left: %q", once)
+		}
+	}
+}
+
+// Expanding a card match must not reach into a hash from an earlier run:
+// a match touching a hash is dropped, which would leak the card.
+func TestDigitRunStopsAtHash(t *testing.T) {
+	e := shippedEngine(t)
+	h := Hash("x")
+	// Find a hash ending in a digit, so the expansion would want to grow.
+	for i := 0; !strings.ContainsAny(h[len(h)-1:], "0123456789"); i++ {
+		h = Hash(strings.Repeat("y", i))
+	}
+	in := h + " 4111 1111 1111 1111"
+	got := e.RedactText(in, nil)
+	if strings.Contains(got, "4111 1111") || !strings.HasPrefix(got, h) {
+		t.Errorf("got %q", got)
 	}
 }
